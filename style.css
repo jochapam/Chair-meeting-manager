@@ -137,6 +137,27 @@ button {
 }
 .btn-icon:hover { background: var(--border); color: var(--text); }
 
+.drag-handle {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  padding: 4px 8px;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--text-dim);
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.drag-handle:hover { background: var(--border); color: var(--text); }
+.dragging {
+  cursor: grabbing;
+  opacity: 0.7;
+  background: var(--accent-dim);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  position: relative;
+  z-index: 10;
+}
+
 .row { display: flex; gap: 8px; align-items: center; }
 .row-wrap { flex-wrap: wrap; }
 .spacer { flex: 1; }
@@ -222,6 +243,16 @@ button {
   color: var(--text-dim);
   margin-top: 4px;
 }
+
+.schedule-badge {
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 10px;
+}
+.schedule-badge.on { color: var(--text-dim); }
+.schedule-badge.behind { color: var(--bad); }
+.schedule-badge.ahead { color: var(--good); }
 
 .control-row {
   display: flex;

@@ -177,6 +177,36 @@ function elapsedSeconds(section) {
   return elapsed;
 }
 
+// Positive = running behind the original agenda; negative = ahead of it.
+// Finished sections count their full actual-vs-original-planned gap (a
+// section that wrapped up early is a realized saving). The in-progress
+// section only ever contributes if it has *already* run past its own
+// original budget — unused remaining budget is never counted as "ahead,"
+// since that time hasn't actually been saved until the section ends.
+// Extends/auto-shrinks don't move the baseline (originalPlannedSeconds),
+// so this tracks the schedule as first drafted, not as adjusted live.
+function scheduleVarianceSeconds() {
+  const m = state.meeting;
+  let variance = 0;
+  for (const s of m.sections) {
+    if (s.status === "done") {
+      variance += s.actualSeconds - s.originalPlannedSeconds;
+    } else if (s.status === "current") {
+      variance += Math.max(0, elapsedSeconds(s) - s.originalPlannedSeconds);
+    }
+  }
+  return variance;
+}
+
+function scheduleBadgeInfo() {
+  const diff = scheduleVarianceSeconds();
+  if (Math.abs(diff) < 30) return { text: "On schedule", cls: "on" };
+  const mins = Math.round(Math.abs(diff) / 60);
+  return diff > 0
+    ? { text: `${mins} min behind schedule`, cls: "behind" }
+    : { text: `${mins} min ahead of schedule`, cls: "ahead" };
+}
+
 /* ---------- proportional shrink ---------- */
 
 function shrinkUpcomingSections(neededSeconds) {
@@ -211,16 +241,6 @@ function extendCurrentSection(minutes) {
   sec.plannedSeconds += addSeconds;
   sec.wasExtended = true;
   shrinkUpcomingSections(addSeconds);
-  save();
-  renderLive();
-}
-
-function moveUpcomingSection(idx, delta) {
-  const m = state.meeting;
-  const targetIdx = idx + delta;
-  if (targetIdx < 0 || targetIdx >= m.sections.length) return;
-  if (m.sections[idx].status !== "upcoming" || m.sections[targetIdx].status !== "upcoming") return;
-  [m.sections[idx], m.sections[targetIdx]] = [m.sections[targetIdx], m.sections[idx]];
   save();
   renderLive();
 }
@@ -400,6 +420,74 @@ function clearTick() {
   }
 }
 
+/* Pointer-based drag reorder (works for mouse and touch, no library).
+   `rowSelector` matches the draggable rows among container's descendants —
+   for a list with fixed leading rows (e.g. done/current agenda items before
+   the reorderable upcoming ones), only rows matching the selector ever
+   participate, so the boundary is respected automatically. Rows need a
+   `data-id` attribute and a `.drag-handle` child to grab. */
+function enableDragReorder(container, rowSelector, onDrop) {
+  let dragEl = null;
+  let startY = 0;
+
+  function getRows() {
+    return Array.from(container.querySelectorAll(rowSelector));
+  }
+
+  function onPointerMove(e) {
+    if (!dragEl) return;
+    dragEl.style.transform = `translateY(${e.clientY - startY}px)`;
+    const rows = getRows();
+    const dragIndex = rows.indexOf(dragEl);
+    const dragRect = dragEl.getBoundingClientRect();
+    const dragMid = dragRect.top + dragRect.height / 2;
+    for (let i = 0; i < rows.length; i++) {
+      if (i === dragIndex) continue;
+      const mid = rows[i].getBoundingClientRect().top + rows[i].getBoundingClientRect().height / 2;
+      if (i < dragIndex && dragMid < mid) {
+        container.insertBefore(dragEl, rows[i]);
+        dragEl.style.transform = "";
+        startY = e.clientY;
+        break;
+      }
+      if (i > dragIndex && dragMid > mid) {
+        container.insertBefore(dragEl, rows[i].nextSibling);
+        dragEl.style.transform = "";
+        startY = e.clientY;
+        break;
+      }
+    }
+  }
+
+  function onPointerUp(e) {
+    if (!dragEl) return;
+    dragEl.releasePointerCapture(e.pointerId);
+    dragEl.classList.remove("dragging");
+    dragEl.style.transform = "";
+    container.removeEventListener("pointermove", onPointerMove);
+    container.removeEventListener("pointerup", onPointerUp);
+    container.removeEventListener("pointercancel", onPointerUp);
+    const finalOrder = getRows().map(r => r.dataset.id);
+    dragEl = null;
+    onDrop(finalOrder);
+  }
+
+  container.addEventListener("pointerdown", (e) => {
+    const handle = e.target.closest(".drag-handle");
+    if (!handle) return;
+    const row = handle.closest(rowSelector);
+    if (!row) return;
+    e.preventDefault();
+    dragEl = row;
+    startY = e.clientY;
+    dragEl.classList.add("dragging");
+    dragEl.setPointerCapture(e.pointerId);
+    container.addEventListener("pointermove", onPointerMove);
+    container.addEventListener("pointerup", onPointerUp);
+    container.addEventListener("pointercancel", onPointerUp);
+  });
+}
+
 function switchView(view) {
   state.view = view;
   save();
@@ -567,8 +655,10 @@ function renderSectionRows(list) {
   if (m.sections.length === 0) {
     list.appendChild(el("p", { style: "margin:4px 0" }, "No sections yet — add one below or paste an agenda."));
   }
-  m.sections.forEach((s, idx) => {
-    const row = el("div", { class: "section-row" });
+  m.sections.forEach((s) => {
+    const row = el("div", { class: "section-row", "data-id": s.id });
+
+    const handle = el("div", { class: "drag-handle", title: "Drag to reorder" }, "⠿");
 
     const nameInput = el("input", { type: "text", class: "name-input", value: s.name });
     nameInput.addEventListener("input", (e) => { s.name = e.target.value; save(); });
@@ -581,31 +671,25 @@ function renderSectionRows(list) {
       save();
     });
 
-    const upBtn = el("button", { class: "btn-icon", title: "Move up", disabled: idx === 0 ? "disabled" : null }, "↑");
-    upBtn.addEventListener("click", () => {
-      if (idx === 0) return;
-      [m.sections[idx - 1], m.sections[idx]] = [m.sections[idx], m.sections[idx - 1]];
-      save(); renderSectionRows(list);
-    });
-    const downBtn = el("button", { class: "btn-icon", title: "Move down", disabled: idx === m.sections.length - 1 ? "disabled" : null }, "↓");
-    downBtn.addEventListener("click", () => {
-      if (idx === m.sections.length - 1) return;
-      [m.sections[idx + 1], m.sections[idx]] = [m.sections[idx], m.sections[idx + 1]];
-      save(); renderSectionRows(list);
-    });
     const delBtn = el("button", { class: "btn-icon btn-danger", title: "Remove" }, "✕");
     delBtn.addEventListener("click", () => {
-      m.sections.splice(idx, 1);
-      save(); renderSectionRows(list);
-      const setupCard = document.getElementById("section-list");
-      if (setupCard) renderSetup();
+      m.sections.splice(m.sections.indexOf(s), 1);
+      save();
+      renderSetup();
     });
 
+    row.appendChild(handle);
     row.appendChild(nameInput);
     row.appendChild(durInput);
     row.appendChild(el("span", { class: "row" }, [el("span", { style: "color:var(--text-dim);font-size:0.8rem" }, "min")]));
-    row.appendChild(el("div", { class: "btn-group" }, [upBtn, downBtn, delBtn]));
+    row.appendChild(delBtn);
     list.appendChild(row);
+  });
+
+  enableDragReorder(list, ".section-row", (orderedIds) => {
+    const byId = new Map(m.sections.map(sec => [sec.id, sec]));
+    m.sections = orderedIds.map(id => byId.get(id));
+    save();
   });
 }
 
@@ -642,6 +726,9 @@ function renderLive() {
     el("span", null, `Planned: ${fmtMinutes(sec.plannedSeconds)}`),
     el("span", null, isOvertime ? "OVER TIME — auto-adjusting agenda" : `${Math.max(0, Math.round(100 - pct))}% remaining`),
   ]));
+
+  const badgeInfo = scheduleBadgeInfo();
+  timerCard.appendChild(el("div", { id: "schedule-badge", class: `schedule-badge ${badgeInfo.cls}` }, badgeInfo.text));
 
   const controlRow = el("div", { class: "control-row" });
   const pauseBtn = el("button", { class: "btn" }, m.timerStatus === "running" ? "⏸ Pause" : "▶ Resume");
@@ -709,7 +796,7 @@ function renderLive() {
 
   m.sections.forEach((s, idx) => {
     const isNextUp = s.status === "upcoming" && idx === m.currentIndex + 1;
-    const item = el("div", { class: `agenda-item ${s.status}${isNextUp ? " next-up" : ""}` });
+    const item = el("div", { class: `agenda-item ${s.status}${isNextUp ? " next-up" : ""}`, "data-id": s.id });
     const statusIcon = s.status === "done" ? "✓" : s.status === "current" ? "▶" : String(idx + 1);
     item.appendChild(el("div", { class: "agenda-status" }, statusIcon));
     const info = el("div", { class: "info" });
@@ -727,19 +814,20 @@ function renderLive() {
     if (s.wasExtended) item.appendChild(el("span", { class: "pill extended" }, "extended"));
     if (s.wasShrunk) item.appendChild(el("span", { class: "pill shrunk" }, "shrunk"));
     if (s.status === "upcoming") {
-      const prevIsUpcoming = idx > 0 && m.sections[idx - 1].status === "upcoming";
-      const nextIsUpcoming = idx < m.sections.length - 1 && m.sections[idx + 1].status === "upcoming";
-      const upBtn = el("button", { class: "btn-icon", title: "Move up the queue" }, "↑");
-      upBtn.disabled = !prevIsUpcoming;
-      upBtn.addEventListener("click", () => moveUpcomingSection(idx, -1));
-      const downBtn = el("button", { class: "btn-icon", title: "Move down the queue" }, "↓");
-      downBtn.disabled = !nextIsUpcoming;
-      downBtn.addEventListener("click", () => moveUpcomingSection(idx, 1));
-      item.appendChild(el("div", { class: "btn-group" }, [upBtn, downBtn]));
+      item.appendChild(el("div", { class: "drag-handle", title: "Drag to reorder" }, "⠿"));
     }
     agendaCard.appendChild(item);
   });
   app.appendChild(agendaCard);
+
+  enableDragReorder(agendaCard, ".agenda-item.upcoming", (orderedIds) => {
+    const byId = new Map(m.sections.map(sec => [sec.id, sec]));
+    const firstUpcomingIdx = m.currentIndex + 1;
+    const reordered = orderedIds.map(id => byId.get(id));
+    m.sections.splice(firstUpcomingIdx, reordered.length, ...reordered);
+    save();
+    renderLive();
+  });
 
   restoreFocus(focusInfo);
   startTick();
@@ -779,6 +867,12 @@ function startTick() {
       if (fillEl) {
         fillEl.style.width = pct + "%";
         fillEl.className = "progress-fill" + (remaining < 0 ? " overtime" : "");
+      }
+      const badgeEl = document.getElementById("schedule-badge");
+      if (badgeEl) {
+        const badgeInfo = scheduleBadgeInfo();
+        badgeEl.textContent = badgeInfo.text;
+        badgeEl.className = `schedule-badge ${badgeInfo.cls}`;
       }
     } else {
       clearTick();
