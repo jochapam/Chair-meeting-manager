@@ -746,6 +746,7 @@ table.minutes-table th {
 .realloc-strip.visible { display: flex; }
 .realloc-strip .realloc-text { padding: 10px 16px; flex: 1; min-width: 260px; font-size: 0.85rem; }
 .realloc-strip .realloc-text .breakdown { color: var(--accent-dark); font-family: "Archivo Narrow", sans-serif; font-size: 0.75rem; margin-left: 6px; }
+.realloc-strip .realloc-text .exhausted-note { display: block; margin-top: 2px; font-size: 0.78rem; color: var(--accent-dark); }
 .realloc-strip .realloc-actions { display: flex; align-items: stretch; }
 .realloc-strip .realloc-actions button {
   background: none;

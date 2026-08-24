@@ -362,6 +362,41 @@ function restoreReallocation() {
   renderLive();
 }
 
+function reallocIsVisible(sec) {
+  return !!(sec && sec.reallocation && sec.reallocation.total > 0.5 && !sec.reallocationDismissed);
+}
+
+// Shared between the initial render and the surgical tick update, so the
+// breakdown text and buttons are built in exactly one place. When the
+// agenda is also exhausted, that note folds into the same bar instead of
+// getting its own full-width row underneath.
+function buildReallocStripContent(stripEl, sec, m) {
+  stripEl.innerHTML = "";
+  const breakdownText = Object.entries(sec.reallocation.breakdown)
+    .map(([id, amt]) => {
+      const s2 = m.sections.find(x => x.id === id);
+      return s2 ? `${s2.name} −${fmtMinutes(amt)}` : null;
+    })
+    .filter(Boolean)
+    .join(" · ");
+  const textChildren = [
+    `${fmtMinutes(sec.reallocation.total)} needs a home.`,
+    el("span", { class: "breakdown" }, breakdownText),
+  ];
+  if (m.agendaExhausted) {
+    textChildren.push(el("span", { class: "exhausted-note" }, "Agenda can't absorb any more — upcoming items are already at their 1-minute floor."));
+  }
+  stripEl.appendChild(el("div", { class: "realloc-text" }, textChildren));
+  const actionsEl = el("div", { class: "realloc-actions" });
+  const runLateBtn = el("button", null, "Run Late");
+  runLateBtn.addEventListener("click", runLate);
+  const restoreBtn = el("button", null, "Restore Plan");
+  restoreBtn.addEventListener("click", restoreReallocation);
+  actionsEl.appendChild(runLateBtn);
+  actionsEl.appendChild(restoreBtn);
+  stripEl.appendChild(actionsEl);
+}
+
 function deferSection(id) {
   const m = state.meeting;
   const idx = m.sections.findIndex(s => s.id === id);
@@ -1252,34 +1287,17 @@ function renderLive() {
 
   header.appendChild(hero);
 
-  // Reallocation strip — legible, reversible overrun handling.
-  const reallocVisible = sec.reallocation && sec.reallocation.total > 0.5 && !sec.reallocationDismissed;
+  // Reallocation strip — legible, reversible overrun handling. When the
+  // agenda is also exhausted, that note folds into this same bar rather
+  // than getting a second full-width row (see buildReallocStripContent).
+  const reallocVisible = reallocIsVisible(sec);
   const reallocStrip = el("div", { id: "realloc-strip", class: "realloc-strip" + (reallocVisible ? " visible" : "") });
-  if (reallocVisible) {
-    const breakdownText = Object.entries(sec.reallocation.breakdown)
-      .map(([id, amt]) => {
-        const s2 = m.sections.find(x => x.id === id);
-        return s2 ? `${s2.name} −${fmtMinutes(amt)}` : null;
-      })
-      .filter(Boolean)
-      .join(" · ");
-    const textEl = el("div", { class: "realloc-text" }, [
-      `${fmtMinutes(sec.reallocation.total)} needs a home.`,
-      el("span", { class: "breakdown" }, breakdownText),
-    ]);
-    reallocStrip.appendChild(textEl);
-    const actionsEl = el("div", { class: "realloc-actions" });
-    const runLateBtn = el("button", null, "Run Late");
-    runLateBtn.addEventListener("click", runLate);
-    const restoreBtn = el("button", null, "Restore Plan");
-    restoreBtn.addEventListener("click", restoreReallocation);
-    actionsEl.appendChild(runLateBtn);
-    actionsEl.appendChild(restoreBtn);
-    reallocStrip.appendChild(actionsEl);
-  }
+  if (reallocVisible) buildReallocStripContent(reallocStrip, sec, m);
   header.appendChild(reallocStrip);
 
-  const exhaustedBannerEl = el("div", { id: "exhausted-banner", class: "exhausted-banner" + (m.agendaExhausted ? " visible" : "") },
+  // Standalone only when there's no realloc strip to fold the note into.
+  const exhaustedStandalone = m.agendaExhausted && !reallocVisible;
+  const exhaustedBannerEl = el("div", { id: "exhausted-banner", class: "exhausted-banner" + (exhaustedStandalone ? " visible" : "") },
     "Agenda can't absorb any more time — upcoming sections are already down to their 1-minute floor.");
   header.appendChild(exhaustedBannerEl);
 
@@ -1571,8 +1589,10 @@ function updateLiveDisplays(reclaimHappened) {
     badgeEl.className = `hero-value hero-big schedule-badge ${badgeInfo.cls}`;
   }
 
+  // Standalone only when there's no realloc strip to fold the note into.
+  const reallocVisible = reallocIsVisible(sec);
   const exhaustedBannerEl = document.getElementById("exhausted-banner");
-  if (exhaustedBannerEl) exhaustedBannerEl.classList.toggle("visible", !!m.agendaExhausted);
+  if (exhaustedBannerEl) exhaustedBannerEl.classList.toggle("visible", !!m.agendaExhausted && !reallocVisible);
 
   if (reclaimHappened) {
     m.sections.forEach((s, idx) => {
@@ -1591,30 +1611,9 @@ function updateLiveDisplays(reclaimHappened) {
     // notes textarea — so a targeted replace here is safe.
     const stripEl = document.getElementById("realloc-strip");
     if (stripEl && sec) {
-      const reallocVisible = sec.reallocation && sec.reallocation.total > 0.5 && !sec.reallocationDismissed;
       stripEl.className = "realloc-strip" + (reallocVisible ? " visible" : "");
-      stripEl.innerHTML = "";
-      if (reallocVisible) {
-        const breakdownText = Object.entries(sec.reallocation.breakdown)
-          .map(([id, amt]) => {
-            const s2 = m.sections.find(x => x.id === id);
-            return s2 ? `${s2.name} −${fmtMinutes(amt)}` : null;
-          })
-          .filter(Boolean)
-          .join(" · ");
-        stripEl.appendChild(el("div", { class: "realloc-text" }, [
-          `${fmtMinutes(sec.reallocation.total)} needs a home.`,
-          el("span", { class: "breakdown" }, breakdownText),
-        ]));
-        const actionsEl = el("div", { class: "realloc-actions" });
-        const runLateBtn = el("button", null, "Run Late");
-        runLateBtn.addEventListener("click", runLate);
-        const restoreBtn = el("button", null, "Restore Plan");
-        restoreBtn.addEventListener("click", restoreReallocation);
-        actionsEl.appendChild(runLateBtn);
-        actionsEl.appendChild(restoreBtn);
-        stripEl.appendChild(actionsEl);
-      }
+      if (reallocVisible) buildReallocStripContent(stripEl, sec, m);
+      else stripEl.innerHTML = "";
     }
   }
 }
