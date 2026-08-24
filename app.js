@@ -114,7 +114,7 @@ function newMeeting() {
     attendees: "",
     createdAt: null,
     endedAt: null,
-    sections: [newSection("Welcome & objectives", 5)],
+    sections: [],
     currentIndex: -1,
     timerStatus: "idle", // idle | running | paused | ended
     generalNotes: "",
@@ -451,12 +451,6 @@ function renderSetup() {
       importStatus.style.color = "var(--bad)";
       return;
     }
-    const isUntouchedSeed = m.sections.length === 1
-      && m.sections[0].name === "Welcome & objectives"
-      && m.sections[0].plannedSeconds === m.sections[0].originalPlannedSeconds
-      && m.sections[0].plannedSeconds === 300
-      && !m.sections[0].notes;
-    if (isUntouchedSeed) m.sections = [];
     for (const item of found) m.sections.push(newSection(item.name, item.minutes));
     save();
     renderSetup();
@@ -487,6 +481,9 @@ function renderSetup() {
 function renderSectionRows(list) {
   const m = state.meeting;
   list.innerHTML = "";
+  if (m.sections.length === 0) {
+    list.appendChild(el("p", { style: "margin:4px 0" }, "No sections yet — add one below or paste an agenda."));
+  }
   m.sections.forEach((s, idx) => {
     const row = el("div", { class: "section-row" });
 
