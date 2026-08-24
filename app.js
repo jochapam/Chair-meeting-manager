@@ -175,6 +175,16 @@ function extendCurrentSection(minutes) {
   renderLive();
 }
 
+function moveUpcomingSection(idx, delta) {
+  const m = state.meeting;
+  const targetIdx = idx + delta;
+  if (targetIdx < 0 || targetIdx >= m.sections.length) return;
+  if (m.sections[idx].status !== "upcoming" || m.sections[targetIdx].status !== "upcoming") return;
+  [m.sections[idx], m.sections[targetIdx]] = [m.sections[targetIdx], m.sections[idx]];
+  save();
+  renderLive();
+}
+
 /* ---------- timer controls ---------- */
 
 function startMeeting() {
@@ -643,6 +653,17 @@ function renderLive() {
     if (isNextUp) item.appendChild(el("span", { class: "pill" }, "up next"));
     if (s.wasExtended) item.appendChild(el("span", { class: "pill extended" }, "extended"));
     if (s.wasShrunk) item.appendChild(el("span", { class: "pill shrunk" }, "shrunk"));
+    if (s.status === "upcoming") {
+      const prevIsUpcoming = idx > 0 && m.sections[idx - 1].status === "upcoming";
+      const nextIsUpcoming = idx < m.sections.length - 1 && m.sections[idx + 1].status === "upcoming";
+      const upBtn = el("button", { class: "btn-icon", title: "Move up the queue" }, "↑");
+      upBtn.disabled = !prevIsUpcoming;
+      upBtn.addEventListener("click", () => moveUpcomingSection(idx, -1));
+      const downBtn = el("button", { class: "btn-icon", title: "Move down the queue" }, "↓");
+      downBtn.disabled = !nextIsUpcoming;
+      downBtn.addEventListener("click", () => moveUpcomingSection(idx, 1));
+      item.appendChild(el("div", { class: "btn-group" }, [upBtn, downBtn]));
+    }
     agendaCard.appendChild(item);
   });
   app.appendChild(agendaCard);
