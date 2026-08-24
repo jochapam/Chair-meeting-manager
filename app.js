@@ -1242,9 +1242,34 @@ function renderLive() {
   topbar.appendChild(el("div", { class: "cockpit-topbar-right" }, [el("span", null, m.title || "Untitled Meeting")]));
   header.appendChild(topbar);
 
-  // Hero: "against plan" promoted to the biggest number on screen (it's the
-  // one thing a chair needs continuously, per the redesign — the per-item
-  // countdown becomes a small supporting stat instead of the headline).
+  // Current item bar: the primary thing on screen — what are we on right
+  // now — appears first and largest. Timing is supporting detail below it.
+  const currentItemBar = el("div", { class: "current-item-bar" });
+  currentItemBar.appendChild(el("div", { class: "notes-header" }, [
+    el("h2", null, sec.name),
+    el("div", { class: "notes-meta" }, `Item ${m.currentIndex + 1} of ${m.sections.length} · Budget ${fmtMinutes(sec.plannedSeconds)}`),
+  ]));
+
+  const notesActions = el("div", { class: "notes-actions" });
+  const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
+  btn1.addEventListener("click", () => extendCurrentSection(1));
+  const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
+  btn5.addEventListener("click", () => extendCurrentSection(5));
+  const decisionBtn = el("button", { class: "btn btn-small" }, "Decision");
+  decisionBtn.addEventListener("click", () => stampFromToolbar("decision"));
+  const actionBtn = el("button", { class: "btn btn-small" }, "Action");
+  actionBtn.addEventListener("click", () => stampFromToolbar("action"));
+  const motionBtn = el("button", { class: "btn btn-small" }, "Motion");
+  motionBtn.addEventListener("click", () => stampFromToolbar("motion"));
+  notesActions.appendChild(decisionBtn);
+  notesActions.appendChild(actionBtn);
+  notesActions.appendChild(motionBtn);
+  notesActions.appendChild(btn1);
+  notesActions.appendChild(btn5);
+  currentItemBar.appendChild(notesActions);
+  header.appendChild(currentItemBar);
+
+  // Timing: supporting detail, smaller than the item bar above it.
   const hero = el("div", { class: "cockpit-hero" });
 
   const planStat = el("div", { class: "hero-stat" });
@@ -1287,9 +1312,11 @@ function renderLive() {
 
   header.appendChild(hero);
 
-  // Reallocation strip — legible, reversible overrun handling. When the
-  // agenda is also exhausted, that note folds into this same bar rather
-  // than getting a second full-width row (see buildReallocStripContent).
+  // Reallocation strip — legible, reversible overrun handling, kept quiet
+  // (neutral background, a thin accent rule) so it doesn't outweigh the
+  // item bar above it. When the agenda is also exhausted, that note folds
+  // into this same bar rather than getting a second full-width row (see
+  // buildReallocStripContent).
   const reallocVisible = reallocIsVisible(sec);
   const reallocStrip = el("div", { id: "realloc-strip", class: "realloc-strip" + (reallocVisible ? " visible" : "") });
   if (reallocVisible) buildReallocStripContent(reallocStrip, sec, m);
@@ -1302,43 +1329,6 @@ function renderLive() {
   header.appendChild(exhaustedBannerEl);
 
   cockpit.appendChild(header);
-
-  // Current item bar: full width, directly under the timers — not squeezed
-  // into the centre column between the agenda rail and captures rail. Title
-  // and controls share a single row to keep the bar's footprint small.
-  const currentItemBar = el("div", { class: "current-item-bar" });
-  currentItemBar.appendChild(el("div", { class: "notes-header" }, [
-    el("h2", null, sec.name),
-    el("div", { class: "notes-meta" }, `Item ${m.currentIndex + 1} of ${m.sections.length} · Budget ${fmtMinutes(sec.plannedSeconds)}`),
-  ]));
-
-  const notesActions = el("div", { class: "notes-actions" });
-  const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
-  btn1.addEventListener("click", () => extendCurrentSection(1));
-  const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
-  btn5.addEventListener("click", () => extendCurrentSection(5));
-  const customInput = el("input", { class: "extend-input", type: "number", min: "1", value: "2", title: "Custom extend amount (minutes)" });
-  const customBtn = el("button", { class: "btn btn-small" }, "Extend");
-  customBtn.addEventListener("click", () => {
-    const v = Math.max(1, parseInt(customInput.value, 10) || 1);
-    extendCurrentSection(v);
-  });
-  const decisionBtn = el("button", { class: "btn btn-small" }, "Decision");
-  decisionBtn.addEventListener("click", () => stampFromToolbar("decision"));
-  const actionBtn = el("button", { class: "btn btn-small" }, "Action");
-  actionBtn.addEventListener("click", () => stampFromToolbar("action"));
-  const motionBtn = el("button", { class: "btn btn-small" }, "Motion");
-  motionBtn.addEventListener("click", () => stampFromToolbar("motion"));
-  notesActions.appendChild(decisionBtn);
-  notesActions.appendChild(actionBtn);
-  notesActions.appendChild(motionBtn);
-  notesActions.appendChild(btn1);
-  notesActions.appendChild(btn5);
-  notesActions.appendChild(customInput);
-  notesActions.appendChild(el("span", { class: "min-label" }, "min"));
-  notesActions.appendChild(customBtn);
-  currentItemBar.appendChild(notesActions);
-  cockpit.appendChild(currentItemBar);
 
   /* ---- body: agenda rail + notes centre + captures rail ---- */
   const railWidth = Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, state.railWidth || 280));

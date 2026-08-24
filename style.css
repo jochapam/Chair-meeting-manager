@@ -669,7 +669,6 @@ table.minutes-table th {
 .cockpit-topbar-right span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .cockpit-hero {
-  border-top: 2px solid var(--line);
   display: grid;
   grid-template-columns: 1.2fr 1.2fr 1.4fr auto;
   background: var(--surface-2);
@@ -687,7 +686,7 @@ table.minutes-table th {
 }
 .hero-value {
   font-family: "Archivo Narrow", sans-serif;
-  font-size: 1.9rem;
+  font-size: 1.3rem;
   font-weight: 600;
   line-height: 1.15;
   letter-spacing: -0.01em;
@@ -695,8 +694,8 @@ table.minutes-table th {
 }
 .hero-value.overtime, .hero-value.behind { color: var(--bad); }
 .hero-value.ahead { color: var(--good); }
-.hero-value.hero-big { font-size: 2.2rem; }
-.hero-value.hero-small { font-size: 1.2rem; }
+.hero-value.hero-big { font-size: 1.5rem; }
+.hero-value.hero-small { font-size: 1.05rem; }
 .hero-sub {
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.6rem;
@@ -728,38 +727,43 @@ table.minutes-table th {
 .exhausted-banner {
   display: none;
   border-top: 2px solid var(--line);
-  background: var(--accent-tint-2);
-  padding: 10px 16px;
-  font-size: 0.82rem;
-  color: var(--accent-dark);
+  border-left: 4px solid var(--accent);
+  background: var(--surface-2);
+  padding: 8px 16px;
+  font-size: 0.8rem;
+  color: var(--text);
 }
 .exhausted-banner.visible { display: block; }
 
+/* Quiet by design — a thin accent rule, not a full-colour fill, so this
+   doesn't outweigh the item bar above it. */
 .realloc-strip {
   display: none;
   border-top: 2px solid var(--line);
-  background: var(--accent-tint);
+  border-left: 4px solid var(--accent);
+  background: var(--surface-2);
   align-items: center;
   gap: 0;
   flex-wrap: wrap;
 }
 .realloc-strip.visible { display: flex; }
-.realloc-strip .realloc-text { padding: 10px 16px; flex: 1; min-width: 260px; font-size: 0.85rem; }
-.realloc-strip .realloc-text .breakdown { color: var(--accent-dark); font-family: "Archivo Narrow", sans-serif; font-size: 0.75rem; margin-left: 6px; }
-.realloc-strip .realloc-text .exhausted-note { display: block; margin-top: 2px; font-size: 0.78rem; color: var(--accent-dark); }
+.realloc-strip .realloc-text { padding: 8px 16px; flex: 1; min-width: 260px; font-size: 0.82rem; color: var(--text); }
+.realloc-strip .realloc-text .breakdown { color: var(--text-dim); font-family: "Archivo Narrow", sans-serif; font-size: 0.75rem; margin-left: 6px; }
+.realloc-strip .realloc-text .exhausted-note { display: block; margin-top: 2px; font-size: 0.78rem; color: var(--text-dim); }
 .realloc-strip .realloc-actions { display: flex; align-items: stretch; }
 .realloc-strip .realloc-actions button {
   background: none;
   border: none;
-  padding: 10px 14px;
+  padding: 8px 14px;
   cursor: pointer;
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: var(--text);
 }
 .realloc-strip .realloc-actions button:last-child { border-right: none; }
-.realloc-strip .realloc-actions button:hover { background: var(--accent-tint-2); }
+.realloc-strip .realloc-actions button:hover { background: var(--line-soft); }
 
 .cockpit-body { flex: 1; display: grid; grid-template-columns: var(--rail-w, 280px) 1fr 260px; align-items: stretch; }
 .cockpit-body.no-captures { grid-template-columns: 300px 1fr; }
@@ -980,7 +984,7 @@ table.minutes-table th {
 }
 .cockpit-notes { display: flex; flex-direction: column; background: var(--bg); min-width: 0; }
 .notes-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
-.notes-header h2 { font-size: 1.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-header h2 { font-size: 1.6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notes-header .notes-meta {
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.66rem;
@@ -990,7 +994,6 @@ table.minutes-table th {
   white-space: nowrap;
 }
 .notes-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
-.notes-actions input.extend-input { width: 48px; text-align: center; }
 .cockpit-notes textarea {
   flex: 1;
   min-height: 260px;
@@ -1013,7 +1016,6 @@ table.minutes-table th {
 @media (max-width: 900px) {
   .cockpit-hero { grid-template-columns: 1fr; }
   .hero-stat { border-right: none; border-bottom: 2px solid var(--line); }
-  .hero-value.hero-big { font-size: 2.2rem; }
   .hero-actions { border-top: none; }
   .cockpit-body { grid-template-columns: 1fr; }
   .cockpit-rail { border-right: none; border-bottom: 2px solid var(--line); max-height: 220px; overflow-y: auto; }
@@ -1023,7 +1025,8 @@ table.minutes-table th {
 @media (max-width: 480px) {
   .timer-display { font-size: 2.6rem; }
   #app { padding: 16px 12px 80px; }
-  .hero-value { font-size: 1.5rem; }
-  .hero-value.hero-big { font-size: 1.8rem; }
+  .notes-header h2 { font-size: 1.3rem; }
+  .hero-value { font-size: 1.1rem; }
+  .hero-value.hero-big { font-size: 1.3rem; }
   .cockpit-topbar-right { display: none; }
 }
