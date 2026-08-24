@@ -671,7 +671,7 @@ table.minutes-table th {
   grid-template-columns: 1.2fr 1.2fr 1.4fr auto;
   background: var(--surface-2);
 }
-.hero-stat { padding: 10px 16px 12px; border-right: 1px solid var(--line-soft); min-width: 0; }
+.hero-stat { padding: 10px 16px 12px; min-width: 0; }
 .hero-label {
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.62rem;
@@ -692,7 +692,7 @@ table.minutes-table th {
 }
 .hero-value.overtime, .hero-value.behind { color: var(--bad); }
 .hero-value.ahead { color: var(--good); }
-.hero-value.hero-big { font-size: 2.9rem; }
+.hero-value.hero-big { font-size: 2.2rem; }
 .hero-value.hero-small { font-size: 1.2rem; }
 .hero-sub {
   font-family: "Archivo Narrow", sans-serif;
@@ -708,7 +708,6 @@ table.minutes-table th {
 .hero-actions button {
   background: none;
   border: none;
-  border-right: 1px solid var(--line-soft);
   padding: 0 16px;
   min-width: 84px;
   cursor: pointer;
@@ -744,11 +743,10 @@ table.minutes-table th {
 .realloc-strip.visible { display: flex; }
 .realloc-strip .realloc-text { padding: 10px 16px; flex: 1; min-width: 260px; font-size: 0.85rem; }
 .realloc-strip .realloc-text .breakdown { color: var(--accent-dark); font-family: "Archivo Narrow", sans-serif; font-size: 0.75rem; margin-left: 6px; }
-.realloc-strip .realloc-actions { display: flex; align-items: stretch; border-left: 2px solid var(--line); }
+.realloc-strip .realloc-actions { display: flex; align-items: stretch; }
 .realloc-strip .realloc-actions button {
   background: none;
   border: none;
-  border-right: 2px solid var(--line);
   padding: 10px 14px;
   cursor: pointer;
   font-family: "Archivo Narrow", sans-serif;
@@ -763,7 +761,6 @@ table.minutes-table th {
 .cockpit-body.no-captures { grid-template-columns: 300px 1fr; }
 
 .cockpit-rail {
-  border-right: 1px solid var(--line-soft);
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
@@ -834,7 +831,6 @@ table.minutes-table th {
 }
 
 .captures-rail {
-  border-left: 1px solid var(--line-soft);
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
@@ -887,7 +883,6 @@ table.minutes-table th {
   min-height: 48px;
   background: none;
   border: none;
-  border-right: 1px solid var(--line-soft-2);
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.62rem;
   letter-spacing: 0.06em;
