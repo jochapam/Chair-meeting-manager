@@ -1151,9 +1151,13 @@ function renderLive() {
   /* ---- header ---- */
   const header = el("div", { class: "cockpit-header" });
   const topbar = el("div", { class: "cockpit-topbar" });
-  topbar.appendChild(el("div", { class: "cockpit-brand" }, [el("span", { class: "brand-dot" }), "Chair"]));
-  const tabs = el("div", { class: "cockpit-tabs" }, navButtons("live"));
-  topbar.appendChild(tabs);
+  const navMenu = el("div", { class: "cockpit-nav-menu" });
+  const brandBtn = el("button", { class: "cockpit-brand" }, [el("span", { class: "brand-dot" }), "Chair", el("span", { class: "nav-caret" }, "▾")]);
+  const dropdown = el("div", { class: "nav-dropdown" }, navButtons("live"));
+  brandBtn.addEventListener("click", () => dropdown.classList.toggle("open"));
+  navMenu.appendChild(brandBtn);
+  navMenu.appendChild(dropdown);
+  topbar.appendChild(navMenu);
   topbar.appendChild(el("div", { class: "cockpit-topbar-right" }, [el("span", null, m.title || "Untitled Meeting")]));
   header.appendChild(topbar);
 
@@ -1235,6 +1239,42 @@ function renderLive() {
 
   cockpit.appendChild(header);
 
+  // Current item bar: full width, directly under the timers — not squeezed
+  // into the centre column between the agenda rail and captures rail.
+  const currentItemBar = el("div", { class: "current-item-bar" });
+  currentItemBar.appendChild(el("div", { class: "notes-header" }, [
+    el("h2", null, sec.name),
+    el("div", { class: "notes-meta" }, `Item ${m.currentIndex + 1} of ${m.sections.length} · Budget ${fmtMinutes(sec.plannedSeconds)}`),
+  ]));
+
+  const notesActions = el("div", { class: "notes-actions" });
+  const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
+  btn1.addEventListener("click", () => extendCurrentSection(1));
+  const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
+  btn5.addEventListener("click", () => extendCurrentSection(5));
+  const customInput = el("input", { type: "number", min: "1", value: "2" });
+  const customBtn = el("button", { class: "btn btn-small" }, "Extend");
+  customBtn.addEventListener("click", () => {
+    const v = Math.max(1, parseInt(customInput.value, 10) || 1);
+    extendCurrentSection(v);
+  });
+  const decisionBtn = el("button", { class: "btn btn-small" }, "Decision");
+  decisionBtn.addEventListener("click", () => stampFromToolbar("decision"));
+  const actionBtn = el("button", { class: "btn btn-small" }, "Action");
+  actionBtn.addEventListener("click", () => stampFromToolbar("action"));
+  const motionBtn = el("button", { class: "btn btn-small" }, "Motion");
+  motionBtn.addEventListener("click", () => stampFromToolbar("motion"));
+  notesActions.appendChild(decisionBtn);
+  notesActions.appendChild(actionBtn);
+  notesActions.appendChild(motionBtn);
+  notesActions.appendChild(el("div", { class: "spacer" }));
+  notesActions.appendChild(btn1);
+  notesActions.appendChild(btn5);
+  notesActions.appendChild(customInput);
+  notesActions.appendChild(customBtn);
+  currentItemBar.appendChild(notesActions);
+  cockpit.appendChild(currentItemBar);
+
   /* ---- body: agenda rail + notes centre + captures rail ---- */
   const body = el("div", { class: "cockpit-body" });
 
@@ -1255,9 +1295,16 @@ function renderLive() {
     const metaEl = el("div", { class: "meta" }, railMetaText(s));
     info.appendChild(metaEl);
     if (s.status === "upcoming") {
-      const deferBtn = el("button", { class: "defer-btn" }, "Defer");
-      deferBtn.addEventListener("click", () => deferSection(s.id));
-      info.appendChild(deferBtn);
+      const actionsEl = el("div", { class: "rail-actions" });
+      if (isNextUp) {
+        const goBtn = el("button", { class: "icon-btn go-next", title: "Go to this item now" }, "▶");
+        goBtn.addEventListener("click", (e) => { e.stopPropagation(); goToNextSection(); });
+        actionsEl.appendChild(goBtn);
+      }
+      const deferBtn = el("button", { class: "icon-btn", title: "Defer to next meeting" }, "✕");
+      deferBtn.addEventListener("click", (e) => { e.stopPropagation(); deferSection(s.id); });
+      actionsEl.appendChild(deferBtn);
+      info.appendChild(actionsEl);
     }
     item.appendChild(info);
     const badgesEl = el("div", { class: "badges" }, railBadges(s, isNextUp));
@@ -1299,37 +1346,6 @@ function renderLive() {
   });
 
   const notes = el("main", { class: "cockpit-notes" });
-  notes.appendChild(el("div", { class: "notes-header" }, [
-    el("h2", null, sec.name),
-    el("div", { class: "notes-meta" }, `Budget ${fmtMinutes(sec.plannedSeconds)}`),
-  ]));
-
-  const notesActions = el("div", { class: "notes-actions" });
-  const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
-  btn1.addEventListener("click", () => extendCurrentSection(1));
-  const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
-  btn5.addEventListener("click", () => extendCurrentSection(5));
-  const customInput = el("input", { type: "number", min: "1", value: "2" });
-  const customBtn = el("button", { class: "btn btn-small" }, "Extend");
-  customBtn.addEventListener("click", () => {
-    const v = Math.max(1, parseInt(customInput.value, 10) || 1);
-    extendCurrentSection(v);
-  });
-  const decisionBtn = el("button", { class: "btn btn-small" }, "Decision");
-  decisionBtn.addEventListener("click", () => stampFromToolbar("decision"));
-  const actionBtn = el("button", { class: "btn btn-small" }, "Action");
-  actionBtn.addEventListener("click", () => stampFromToolbar("action"));
-  const motionBtn = el("button", { class: "btn btn-small" }, "Motion");
-  motionBtn.addEventListener("click", () => stampFromToolbar("motion"));
-  notesActions.appendChild(decisionBtn);
-  notesActions.appendChild(actionBtn);
-  notesActions.appendChild(motionBtn);
-  notesActions.appendChild(el("div", { class: "spacer" }));
-  notesActions.appendChild(btn1);
-  notesActions.appendChild(btn5);
-  notesActions.appendChild(customInput);
-  notesActions.appendChild(customBtn);
-  notes.appendChild(notesActions);
 
   const notesArea = el("textarea", { placeholder: "Capture points, decisions, or follow-ups. Start a line with /decision, /action or /motion to file it — @Name assigns an owner." });
   notesArea.value = sec.notes;
@@ -1603,6 +1619,13 @@ function restoreFocus(info) {
     textarea.scrollTop = info.scrollTop;
   }
 }
+
+/* ---------- nav dropdown (live view "Chair" menu) ---------- */
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".cockpit-nav-menu")) return;
+  document.querySelectorAll(".nav-dropdown.open").forEach(d => d.classList.remove("open"));
+});
 
 /* ---------- keyboard shortcuts (live view only, inert while typing notes) ---------- */
 
