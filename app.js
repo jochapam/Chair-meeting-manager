@@ -14,7 +14,8 @@ function defaultState() {
   return {
     view: "setup", // setup | live | minutes | history
     meeting: null,
-    history: [], // array of saved meeting snapshots (most recent first)
+    history: [], // array of completed meeting snapshots (most recent first)
+    savedAgendas: [], // array of pre-meeting drafts saved for later (most recent first)
   };
 }
 
@@ -121,6 +122,45 @@ function newMeeting() {
     decisions: [],
     actionItems: [],
   };
+}
+
+/* ---------- saved agendas (pre-meeting drafts) ---------- */
+
+function saveAgendaForLater() {
+  const m = state.meeting;
+  if (m.sections.length === 0) {
+    alert("Add at least one agenda section before saving.");
+    return;
+  }
+  state.savedAgendas.unshift({
+    id: uid(),
+    title: m.title,
+    attendees: m.attendees,
+    sections: JSON.parse(JSON.stringify(m.sections)),
+    savedAt: Date.now(),
+  });
+  save();
+}
+
+function loadSavedAgenda(id) {
+  const saved = state.savedAgendas.find(a => a.id === id);
+  if (!saved) return;
+  const m = state.meeting;
+  if (m.sections.length > 0 && !confirm(`Load "${saved.title || "Untitled Meeting"}"? This replaces your current unsaved draft.`)) return;
+  m.title = saved.title;
+  m.attendees = saved.attendees;
+  m.sections = JSON.parse(JSON.stringify(saved.sections));
+  save();
+  renderSetup();
+}
+
+function deleteSavedAgenda(id) {
+  const idx = state.savedAgendas.findIndex(a => a.id === id);
+  if (idx === -1) return;
+  if (!confirm("Delete this saved agenda?")) return;
+  state.savedAgendas.splice(idx, 1);
+  save();
+  renderSetup();
 }
 
 function currentSection() {
@@ -416,6 +456,31 @@ function renderSetup() {
 
   app.appendChild(card);
 
+  if (state.savedAgendas.length > 0) {
+    const savedCard = el("div", { class: "card" });
+    savedCard.appendChild(el("h3", null, "Saved Agendas"));
+    savedCard.appendChild(el("p", null, "Drafts you prepped ahead of time. Load one to start editing or run the meeting."));
+    state.savedAgendas.forEach(a => {
+      const totalMin = Math.round(a.sections.reduce((s, x) => s + x.plannedSeconds, 0) / 60);
+      const item = el("div", { class: "history-item" });
+      const left = el("div", null, [
+        el("div", { class: "name" }, a.title || "Untitled Meeting"),
+        el("div", { class: "date" }, `${a.sections.length} section${a.sections.length === 1 ? "" : "s"} · ${totalMin} min · saved ${fmtDateTime(a.savedAt)}`),
+      ]);
+      const actions = el("div", { class: "row" });
+      const loadBtn = el("button", { class: "btn btn-small" }, "Load");
+      loadBtn.addEventListener("click", () => loadSavedAgenda(a.id));
+      const delBtn = el("button", { class: "btn-icon btn-danger" }, "✕");
+      delBtn.addEventListener("click", () => deleteSavedAgenda(a.id));
+      actions.appendChild(loadBtn);
+      actions.appendChild(delBtn);
+      item.appendChild(left);
+      item.appendChild(actions);
+      savedCard.appendChild(item);
+    });
+    app.appendChild(savedCard);
+  }
+
   const agendaCard = el("div", { class: "card" });
   agendaCard.appendChild(el("h3", null, "Agenda"));
   agendaCard.appendChild(el("p", null, "Add sections with a planned duration. You can extend any section live — remaining upcoming sections will automatically shrink to try to keep the meeting on schedule."));
@@ -480,12 +545,20 @@ function renderSetup() {
 
   app.appendChild(agendaCard);
 
-  const startBtn = el("button", { class: "btn btn-primary", style: "width:100%;padding:12px;font-size:1rem" }, "Start Meeting ▶");
+  const actionRow = el("div", { class: "row" });
+  const saveForLaterBtn = el("button", { class: "btn", style: "padding:12px" }, "💾 Save for Later");
+  saveForLaterBtn.addEventListener("click", () => {
+    saveAgendaForLater();
+    renderSetup();
+  });
+  const startBtn = el("button", { class: "btn btn-primary", style: "flex:1;padding:12px;font-size:1rem" }, "Start Meeting ▶");
   startBtn.addEventListener("click", () => {
     if (m.sections.length === 0) { alert("Add at least one agenda section first."); return; }
     startMeeting();
   });
-  app.appendChild(startBtn);
+  actionRow.appendChild(saveForLaterBtn);
+  actionRow.appendChild(startBtn);
+  app.appendChild(actionRow);
 }
 
 function renderSectionRows(list) {
