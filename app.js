@@ -65,6 +65,28 @@ function fmtDateTime(ts) {
   });
 }
 
+/* ---------- agenda text import ---------- */
+
+// Parses lines like "1.2 In camera session   10mins" (tab, spaces, or a
+// trailing dash before the number all work). Lines with no trailing
+// "Nmin(s)" are skipped, which conveniently drops category headers
+// (e.g. "1. Board Governance") and untimed sub-item references
+// (e.g. "1.3.a Related Party Transactions") without any special-casing.
+function parseAgendaText(text) {
+  const parsed = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = line.match(/^(.*?)[\s\-–—:|]*(\d+)\s*(?:mins?|minutes?|m)\.?\s*$/i);
+    if (!m) continue;
+    const name = m[1].trim().replace(/[-–—:|]\s*$/, "").trim();
+    const minutes = parseInt(m[2], 10);
+    if (!name || !minutes) continue;
+    parsed.push({ name, minutes });
+  }
+  return parsed;
+}
+
 /* ---------- meeting model ---------- */
 
 function newSection(name, minutes) {
@@ -411,6 +433,39 @@ function renderSetup() {
   addRow.appendChild(durField);
   addRow.appendChild(addBtn);
   agendaCard.appendChild(addRow);
+
+  const importDetails = el("details", { style: "margin-top:14px" });
+  importDetails.appendChild(el("summary", { style: "cursor:pointer;font-size:0.85rem;color:var(--text-dim)" }, "Or paste an agenda to import"));
+  const importBody = el("div", { style: "margin-top:8px" });
+  importBody.appendChild(el("p", { style: "font-size:0.8rem;margin-bottom:6px" },
+    'One item per line, ending in a duration, e.g. "1.2 In camera session  10mins". Lines without a duration (section headers, document references) are skipped.'));
+  const importArea = el("textarea", { placeholder: "Paste agenda text here...", style: "min-height:100px" });
+  const importRow = el("div", { class: "row", style: "margin-top:8px" });
+  const importBtn = el("button", { class: "btn btn-small" }, "Parse & Add Sections");
+  const importStatus = el("span", { style: "font-size:0.8rem;color:var(--text-dim)" });
+  importBtn.addEventListener("click", () => {
+    const found = parseAgendaText(importArea.value);
+    if (found.length === 0) {
+      importStatus.textContent = "No timed lines found.";
+      importStatus.style.color = "var(--bad)";
+      return;
+    }
+    const isUntouchedSeed = m.sections.length === 1
+      && m.sections[0].name === "Welcome & objectives"
+      && m.sections[0].plannedSeconds === m.sections[0].originalPlannedSeconds
+      && m.sections[0].plannedSeconds === 300
+      && !m.sections[0].notes;
+    if (isUntouchedSeed) m.sections = [];
+    for (const item of found) m.sections.push(newSection(item.name, item.minutes));
+    save();
+    renderSetup();
+  });
+  importRow.appendChild(importBtn);
+  importRow.appendChild(importStatus);
+  importBody.appendChild(importArea);
+  importBody.appendChild(importRow);
+  importDetails.appendChild(importBody);
+  agendaCard.appendChild(importDetails);
 
   const totalMin = Math.round(m.sections.reduce((s, x) => s + x.plannedSeconds, 0) / 60);
   agendaCard.appendChild(el("div", { class: "meeting-meta", style: "margin-top:12px" }, [
