@@ -319,6 +319,8 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
   text-transform: uppercase;
 }
 .btn:hover { background: var(--accent-tint); border-color: var(--accent); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; background: var(--surface); border-color: var(--line); }
+.btn:disabled:hover { background: var(--surface); border-color: var(--line); }
 
 .btn-primary {
   background: var(--accent);
@@ -651,6 +653,7 @@ table.minutes-table th {
 .nav-dropdown button:hover { background: var(--accent-tint); }
 .nav-dropdown button.active { font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
 .nav-dropdown button:disabled { opacity: 0.4; cursor: not-allowed; background: none; }
+.nav-dropdown-divider { border-top: 1px solid var(--line-soft-2); margin: 2px 0; }
 .cockpit-topbar-right {
   flex: 1;
   display: flex;
@@ -740,20 +743,6 @@ table.minutes-table th {
 .realloc-strip .realloc-text { padding: 8px 16px; flex: 1; min-width: 260px; font-size: 0.82rem; color: var(--text); }
 .realloc-strip .realloc-text .breakdown { color: var(--text-dim); font-family: "Archivo Narrow", sans-serif; font-size: 0.75rem; margin-left: 6px; }
 .realloc-strip .realloc-text .exhausted-note { display: block; margin-top: 2px; font-size: 0.78rem; color: var(--text-dim); }
-.realloc-strip .realloc-actions { display: flex; align-items: stretch; }
-.realloc-strip .realloc-actions button {
-  background: none;
-  border: none;
-  padding: 8px 14px;
-  cursor: pointer;
-  font-family: "Archivo Narrow", sans-serif;
-  font-size: 0.68rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text);
-}
-.realloc-strip .realloc-actions button:last-child { border-right: none; }
-.realloc-strip .realloc-actions button:hover { background: var(--line-soft); }
 
 .cockpit-body { flex: 1; display: grid; grid-template-columns: var(--rail-w, 280px) 1fr var(--captures-w, 260px); align-items: stretch; }
 .cockpit-body.no-captures { grid-template-columns: 300px 1fr; }
@@ -914,6 +903,7 @@ table.minutes-table th {
 }
 .thumb-rail button:last-child { border-right: none; }
 .thumb-rail button.primary { background: var(--accent); color: #fff; font-weight: 600; }
+.thumb-rail button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .standing-badge {
   display: inline-block;
@@ -1004,7 +994,6 @@ table.minutes-table th {
 .item-timer-value.overtime { color: var(--bad); }
 .item-timer-value.warn { color: var(--warn); }
 .current-item-bar .progress-track { margin-top: 12px; }
-.notes-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
 .cockpit-notes textarea {
   flex: 1;
   min-height: 260px;

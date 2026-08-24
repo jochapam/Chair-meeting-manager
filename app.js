@@ -120,8 +120,6 @@ function newSection(name, minutes) {
     wasShrunk: false,
     autoReclaimed: 0, // seconds already pulled from upcoming sections due to running overtime
     reallocation: null, // { total, breakdown: {sectionId: seconds} } — set while this section is current
-    reallocationPaused: false, // true once the chair chose "Run late" or "Restore plan"
-    reallocationDismissed: false, // true once the chair dismissed the reallocation strip via "Run late"
   };
 }
 
@@ -302,13 +300,9 @@ function shrinkUpcomingSections(neededSeconds) {
 }
 
 // Runs a reclaim attempt, tracks who gave up what (for the reallocation
-// strip and "Restore plan"), and updates the "agenda exhausted" flag.
-// A no-op once the chair has chosen "Run late" or "Restore plan" for this
-// section — reallocationPaused means further overrun just runs later
-// instead of continuing to shave other items.
+// strip), and updates the "agenda exhausted" flag.
 function reclaimTime(neededSeconds, sec) {
   const m = state.meeting;
-  if (sec.reallocationPaused) return 0;
   const before = new Map(m.sections.filter(s => s.status === "upcoming").map(s => [s.id, s.plannedSeconds]));
   const reclaimed = shrinkUpcomingSections(neededSeconds);
   m.agendaExhausted = reclaimed < neededSeconds - 0.5;
@@ -334,43 +328,14 @@ function extendCurrentSection(minutes) {
   renderLive();
 }
 
-// "Run late": stop pulling time from other items for the rest of this
-// section's overrun. What's already been reallocated stays reallocated;
-// the meeting will simply finish later from here.
-function runLate() {
-  const sec = currentSection();
-  if (!sec) return;
-  sec.reallocationPaused = true;
-  sec.reallocationDismissed = true;
-  save();
-  renderLive();
-}
-
-// "Restore plan": give back everything this section has taken from
-// upcoming items so far, and stop taking more.
-function restoreReallocation() {
-  const m = state.meeting;
-  const sec = currentSection();
-  if (!sec || !sec.reallocation) return;
-  for (const [id, amount] of Object.entries(sec.reallocation.breakdown)) {
-    const s = m.sections.find(x => x.id === id);
-    if (s) s.plannedSeconds += amount;
-  }
-  sec.autoReclaimed -= sec.reallocation.total;
-  sec.reallocation = { total: 0, breakdown: {} };
-  sec.reallocationPaused = true;
-  save();
-  renderLive();
-}
-
 function reallocIsVisible(sec) {
-  return !!(sec && sec.reallocation && sec.reallocation.total > 0.5 && !sec.reallocationDismissed);
+  return !!(sec && sec.reallocation && sec.reallocation.total > 0.5);
 }
 
 // Shared between the initial render and the surgical tick update, so the
-// breakdown text and buttons are built in exactly one place. When the
-// agenda is also exhausted, that note folds into the same bar instead of
-// getting its own full-width row underneath.
+// breakdown text is built in exactly one place. Purely informational — the
+// auto-reclaim just runs. When the agenda is also exhausted, that note
+// folds into the same bar instead of getting its own full-width row.
 function buildReallocStripContent(stripEl, sec, m) {
   stripEl.innerHTML = "";
   const breakdownText = Object.entries(sec.reallocation.breakdown)
@@ -388,14 +353,6 @@ function buildReallocStripContent(stripEl, sec, m) {
     textChildren.push(el("span", { class: "exhausted-note" }, "Agenda can't absorb any more — upcoming items are already at their 1-minute floor."));
   }
   stripEl.appendChild(el("div", { class: "realloc-text" }, textChildren));
-  const actionsEl = el("div", { class: "realloc-actions" });
-  const runLateBtn = el("button", null, "Run Late");
-  runLateBtn.addEventListener("click", runLate);
-  const restoreBtn = el("button", null, "Restore Plan");
-  restoreBtn.addEventListener("click", restoreReallocation);
-  actionsEl.appendChild(runLateBtn);
-  actionsEl.appendChild(restoreBtn);
-  stripEl.appendChild(actionsEl);
 }
 
 function deferSection(id) {
@@ -507,6 +464,31 @@ function goToNextSection() {
   next.status = "current";
   next.startedAt = Date.now();
   next.pausedAccum = 0;
+  m.timerStatus = "running";
+  save();
+  render();
+}
+
+// Steps back to the previous item: puts the current one back to upcoming
+// (untimed, as if it hadn't started), and resumes the previous item's
+// clock from exactly where it left off rather than restarting it.
+function goToPreviousSection() {
+  const m = state.meeting;
+  if (!m || m.currentIndex <= 0) return;
+  const sec = currentSection();
+  if (!sec) return;
+  sec.status = "upcoming";
+  sec.startedAt = null;
+  sec.pausedAccum = 0;
+  sec.actualSeconds = null;
+
+  const prevIndex = m.currentIndex - 1;
+  m.currentIndex = prevIndex;
+  const prev = m.sections[prevIndex];
+  prev.status = "current";
+  prev.pausedAccum = prev.actualSeconds || 0;
+  prev.actualSeconds = null;
+  prev.startedAt = Date.now();
   m.timerStatus = "running";
   save();
   render();
@@ -1084,8 +1066,6 @@ function resetMeeting() {
     s.wasShrunk = false;
     s.autoReclaimed = 0;
     s.reallocation = null;
-    s.reallocationPaused = false;
-    s.reallocationDismissed = false;
     s.plannedSeconds = s.originalPlannedSeconds;
   }
   save();
@@ -1238,6 +1218,10 @@ function renderLive() {
   const navMenu = el("div", { class: "cockpit-nav-menu" });
   const brandBtn = el("button", { class: "cockpit-brand" }, [el("span", { class: "brand-dot" }), "Chair", el("span", { class: "nav-caret" }, "▾")]);
   const dropdown = el("div", { class: "nav-dropdown" }, navButtons("live"));
+  dropdown.appendChild(el("div", { class: "nav-dropdown-divider" }));
+  const resetMenuBtn = el("button", null, "Reset Meeting");
+  resetMenuBtn.addEventListener("click", () => { dropdown.classList.remove("open"); resetMeeting(); });
+  dropdown.appendChild(resetMenuBtn);
   brandBtn.addEventListener("click", () => dropdown.classList.toggle("open"));
   navMenu.appendChild(brandBtn);
   navMenu.appendChild(dropdown);
@@ -1261,14 +1245,6 @@ function renderLive() {
   const remainValueClass = isOvertime ? "item-timer-value overtime" : (pct > 85 ? "item-timer-value warn" : "item-timer-value");
   const remainValueEl = el("div", { id: "timer-display", class: remainValueClass }, fmtClock(remaining));
   itemTimerBlock.appendChild(remainValueEl);
-  const notesActions = el("div", { class: "notes-actions" });
-  const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
-  btn1.addEventListener("click", () => extendCurrentSection(1));
-  const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
-  btn5.addEventListener("click", () => extendCurrentSection(5));
-  notesActions.appendChild(btn1);
-  notesActions.appendChild(btn5);
-  itemTimerBlock.appendChild(notesActions);
   itemBarTop.appendChild(itemTimerBlock);
   currentItemBar.appendChild(itemBarTop);
 
@@ -1312,11 +1288,18 @@ function renderLive() {
   pauseBtn.addEventListener("click", togglePause);
   const breakBtn = el("button", null, "Break");
   breakBtn.addEventListener("click", takeBreak);
-  const nextBtn = el("button", { class: "primary" }, m.currentIndex === m.sections.length - 1 ? "Finish Meeting" : "Next Item");
-  nextBtn.addEventListener("click", goToNextSection);
+  const topEndBtn = el("button", { class: "primary" }, "End Meeting");
+  topEndBtn.addEventListener("click", () => {
+    showToast({
+      kind: "confirm",
+      message: "End the meeting now and go to notes & minutes?",
+      confirmLabel: "End Meeting",
+      onConfirm: endMeeting,
+    });
+  });
   heroActions.appendChild(pauseBtn);
   heroActions.appendChild(breakBtn);
-  heroActions.appendChild(nextBtn);
+  heroActions.appendChild(topEndBtn);
   hero.appendChild(heroActions);
 
   header.appendChild(hero);
@@ -1442,23 +1425,17 @@ function renderLive() {
   endRow.appendChild(stampGroup);
 
   const footerActions = el("div", { style: "display:flex;gap:8px" });
-  const resetBtn = el("button", { class: "btn" }, "Reset Meeting");
-  resetBtn.addEventListener("click", resetMeeting);
-  const endBtn = el("button", { class: "btn btn-danger" }, "End Meeting");
-  endBtn.addEventListener("click", () => {
-    showToast({
-      kind: "confirm",
-      message: "End the meeting now and go to notes & minutes?",
-      confirmLabel: "End Meeting",
-      onConfirm: endMeeting,
-    });
-  });
-  footerActions.appendChild(resetBtn);
-  footerActions.appendChild(endBtn);
+  const prevBtn = el("button", { class: "btn" }, "Previous Item");
+  prevBtn.disabled = m.currentIndex <= 0;
+  prevBtn.addEventListener("click", goToPreviousSection);
+  const nextBtn = el("button", { class: "btn" }, "Next Item");
+  nextBtn.addEventListener("click", goToNextSection);
+  footerActions.appendChild(prevBtn);
+  footerActions.appendChild(nextBtn);
   endRow.appendChild(footerActions);
   notes.appendChild(endRow);
 
-  notes.appendChild(el("div", { class: "kbd-hint" }, "Space pause · → next · + extend · B break · D/A/M stamp (when not typing) · /decision /action /motion in notes"));
+  notes.appendChild(el("div", { class: "kbd-hint" }, "P pause · ← previous · → next · + extend · B break · D/A/M stamp (when not typing) · /decision /action /motion in notes"));
 
   body.appendChild(notes);
 
@@ -1477,14 +1454,15 @@ function renderLive() {
   const thumbRail = el("div", { class: "thumb-rail" });
   const tPause = el("button", null, m.timerStatus === "running" ? "Pause" : "Resume");
   tPause.addEventListener("click", togglePause);
-  const tExtend = el("button", null, "+1 min");
-  tExtend.addEventListener("click", () => extendCurrentSection(1));
+  const tPrev = el("button", null, "Previous");
+  tPrev.disabled = m.currentIndex <= 0;
+  tPrev.addEventListener("click", goToPreviousSection);
   const tDecision = el("button", null, "Decision");
   tDecision.addEventListener("click", () => stampFromToolbar("decision"));
   const tNext = el("button", { class: "primary" }, "Next");
   tNext.addEventListener("click", goToNextSection);
   thumbRail.appendChild(tPause);
-  thumbRail.appendChild(tExtend);
+  thumbRail.appendChild(tPrev);
   thumbRail.appendChild(tDecision);
   thumbRail.appendChild(tNext);
   cockpit.appendChild(thumbRail);
@@ -1699,13 +1677,18 @@ document.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
 
   switch (e.key) {
-    case " ":
+    case "p":
+    case "P":
       e.preventDefault();
       togglePause();
       break;
     case "ArrowRight":
       e.preventDefault();
       goToNextSection();
+      break;
+    case "ArrowLeft":
+      e.preventDefault();
+      goToPreviousSection();
       break;
     case "+":
     case "=":
