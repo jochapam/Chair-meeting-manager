@@ -429,11 +429,12 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
   text-align: center;
 }
 .agenda-item.done .agenda-status { color: var(--text-dim); }
-.agenda-item.current .agenda-status { color: var(--accent); font-weight: 700; }
+.agenda-item.current { background: var(--accent-tint); margin: 0 -18px; padding-left: 18px; padding-right: 18px; }
+.agenda-item.current .agenda-status { color: var(--accent-dark); font-weight: 700; }
 
 .agenda-item .info { flex: 1; min-width: 0; }
 .agenda-item .info .name { font-weight: 600; }
-.agenda-item.current .info .name { color: var(--accent-dark); }
+.agenda-item.current .info .name { color: var(--accent-dark); font-weight: 700; }
 .agenda-item .info .meta {
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.68rem;
@@ -443,9 +444,10 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
   margin-top: 2px;
 }
 
-.agenda-item.next-up { background: var(--accent-tint); margin: 0 -18px; padding-left: 18px; padding-right: 18px; }
-.agenda-item.next-up .agenda-status { color: var(--accent-dark); }
-.agenda-item.next-up .info .name { color: var(--accent-dark); }
+/* "Up next" is a secondary cue — a left rule and the label are enough.
+   No fill and no accent text colour, so it never reads as more current
+   than the item actually running (which owns the accent fill above). */
+.agenda-item.next-up { border-left: 3px solid var(--accent); }
 
 .timer-card { text-align: center; padding: 28px 18px; }
 .timer-card .section-name { font-size: 1.1rem; font-weight: 700; margin-bottom: 6px; }
@@ -758,15 +760,27 @@ table.minutes-table th {
 .realloc-strip .realloc-actions button:last-child { border-right: none; }
 .realloc-strip .realloc-actions button:hover { background: var(--accent-tint-2); }
 
-.cockpit-body { flex: 1; display: grid; grid-template-columns: 280px 1fr 260px; align-items: stretch; }
+.cockpit-body { flex: 1; display: grid; grid-template-columns: var(--rail-w, 280px) 1fr 260px; align-items: stretch; }
 .cockpit-body.no-captures { grid-template-columns: 300px 1fr; }
 
 .cockpit-rail {
+  position: relative;
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
+.rail-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 15;
+  touch-action: none;
+}
+.rail-resize-handle:hover, .rail-resize-handle.dragging { background: var(--accent-tint); }
 .rail-header {
   padding: 12px 14px;
   border-bottom: 2px solid var(--line);
@@ -781,7 +795,8 @@ table.minutes-table th {
 }
 .rail-header span { color: var(--text-dim); font-weight: 400; }
 .cockpit-rail .agenda-item { padding: 11px 14px; align-items: flex-start; }
-.cockpit-rail .agenda-item.next-up { margin: 0; }
+.cockpit-rail .agenda-item.current { margin: 0; }
+.cockpit-rail .agenda-item.next-up { margin: 0; padding-left: 11px; }
 .cockpit-rail .drag-handle { margin-left: auto; align-self: center; }
 
 .rail-actions { display: flex; gap: 6px; margin-top: 6px; }
@@ -991,6 +1006,7 @@ table.minutes-table th {
   .cockpit-body { grid-template-columns: 260px 1fr; }
   .captures-rail { border-left: none; border-top: 2px solid var(--line); max-height: 260px; }
   .cockpit-body { grid-template-rows: auto auto auto; }
+  .rail-resize-handle { display: none; }
 }
 
 @media (max-width: 900px) {

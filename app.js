@@ -17,6 +17,7 @@ function defaultState() {
     meeting: null,
     history: [], // array of completed meeting snapshots (most recent first)
     savedAgendas: [], // array of pre-meeting drafts saved for later (most recent first)
+    railWidth: 280, // user-resizable width of the live view's agenda rail, in px
   };
 }
 
@@ -693,6 +694,51 @@ function enableDragReorder(container, rowSelector, onDrop) {
   });
 }
 
+const RAIL_MIN_WIDTH = 200;
+const RAIL_MAX_WIDTH = 520;
+
+// Drags the agenda rail's width via the --rail-w custom property (rather
+// than setting grid-template-columns inline), so the narrow-viewport media
+// query that collapses the grid to a single column can still win — an
+// inline grid-template-columns would out-specificity it at any width.
+// Mutates live during the drag for a smooth feel; only writes to state
+// (+ saves) on release, since a full renderLive() mid-drag would fight the
+// pointer capture.
+function enableRailResize(handle, bodyEl) {
+  let startX = 0;
+  let startWidth = 0;
+  let currentWidth = 0;
+
+  function onPointerMove(e) {
+    currentWidth = Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, startWidth + (e.clientX - startX)));
+    bodyEl.style.setProperty("--rail-w", `${currentWidth}px`);
+  }
+
+  function onPointerUp(e) {
+    handle.releasePointerCapture(e.pointerId);
+    handle.classList.remove("dragging");
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", onPointerUp);
+    document.removeEventListener("pointercancel", onPointerUp);
+    if (currentWidth > 0) {
+      state.railWidth = currentWidth;
+      save();
+    }
+  }
+
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startWidth = state.railWidth || 280;
+    currentWidth = startWidth;
+    handle.classList.add("dragging");
+    handle.setPointerCapture(e.pointerId);
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
+    document.addEventListener("pointercancel", onPointerUp);
+  });
+}
+
 /* ---------- toast (replaces native confirm()/alert()) ---------- */
 
 let toastEl = null;
@@ -1277,7 +1323,8 @@ function renderLive() {
   cockpit.appendChild(currentItemBar);
 
   /* ---- body: agenda rail + notes centre + captures rail ---- */
-  const body = el("div", { class: "cockpit-body" });
+  const railWidth = Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, state.railWidth || 280));
+  const body = el("div", { class: "cockpit-body", style: `--rail-w: ${railWidth}px` });
 
   const rail = el("aside", { class: "cockpit-rail" });
   const doneCount = m.sections.filter(s => s.status === "done").length;
@@ -1334,6 +1381,10 @@ function renderLive() {
     });
     rail.appendChild(deferredBlock);
   }
+
+  const railResizeHandle = el("div", { class: "rail-resize-handle", title: "Drag to resize the agenda panel" });
+  rail.appendChild(railResizeHandle);
+  enableRailResize(railResizeHandle, body);
 
   body.appendChild(rail);
 
