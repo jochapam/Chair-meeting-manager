@@ -88,6 +88,11 @@ p { margin: 0 0 8px; color: var(--text-dim); }
 .nav-links button:last-child { border-right: none; }
 .nav-links button:hover { background: var(--accent-tint); }
 .nav-links button.active { background: var(--accent); color: #fff; font-weight: 600; }
+.nav-links button:disabled, .cockpit-tabs button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: none;
+}
 
 .card {
   background: var(--surface);
@@ -677,6 +682,19 @@ table.minutes-table th {
   margin-left: 6px;
 }
 .standing-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-mid); margin-top: 8px; }
+
+.reset-link {
+  background: none;
+  border: none;
+  padding: 6px;
+  cursor: pointer;
+  font-family: "Archivo Narrow", sans-serif;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.reset-link:hover { color: var(--bad); text-decoration: underline; }
 
 .suggestion {
   font-family: "Archivo Narrow", sans-serif;

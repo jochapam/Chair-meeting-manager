@@ -736,17 +736,42 @@ function switchView(view) {
 
 /* ---------- top nav (setup / minutes / history — live view has its own header) ---------- */
 
+// Three explicit tabs, used identically in the plain topbar (Setup/Minutes/
+// History) and the live cockpit header — Prepare is disabled while a
+// meeting is actually running/paused (there's only ever one meeting in
+// flight, so starting a fresh draft would blow away the live one), and
+// Live is disabled until there's something to show.
+function navButtons(activeKey) {
+  const m = state.meeting;
+  const meetingActive = m && (m.timerStatus === "running" || m.timerStatus === "paused");
+  const meetingEnded = m && m.timerStatus === "ended";
+  const hasLiveContent = meetingActive || meetingEnded;
+
+  const prepareBtn = el("button", { class: activeKey === "prepare" ? "active" : "" }, "Prepare");
+  if (meetingActive) {
+    prepareBtn.disabled = true;
+    prepareBtn.title = "Finish or end the current meeting first";
+  } else {
+    prepareBtn.addEventListener("click", () => switchView("setup"));
+  }
+
+  const liveBtn = el("button", { class: activeKey === "live" ? "active" : "" }, "Live");
+  if (!hasLiveContent) {
+    liveBtn.disabled = true;
+    liveBtn.title = "No meeting running yet — prepare one first";
+  } else {
+    liveBtn.addEventListener("click", () => switchView(meetingEnded ? "minutes" : "live"));
+  }
+
+  const historyBtn = el("button", { class: activeKey === "history" ? "active" : "" }, "History");
+  historyBtn.addEventListener("click", () => switchView("history"));
+
+  return [prepareBtn, liveBtn, historyBtn];
+}
+
 function renderTopbar(activeView) {
-  const nav = el("div", { class: "nav-links" }, [
-    el("button", {
-      class: activeView === "setup" || activeView === "live" || activeView === "minutes" ? "active" : "",
-      onclick: () => switchView(state.meeting ? (state.meeting.timerStatus === "ended" ? "minutes" : (state.meeting.timerStatus === "idle" ? "setup" : "live")) : "setup"),
-    }, "Meeting"),
-    el("button", {
-      class: activeView === "history" ? "active" : "",
-      onclick: () => switchView("history"),
-    }, "History"),
-  ]);
+  const activeKey = activeView === "setup" ? "prepare" : (activeView === "live" || activeView === "minutes") ? "live" : "history";
+  const nav = el("div", { class: "nav-links" }, navButtons(activeKey));
   return el("div", { class: "topbar" }, [
     el("h1", null, [el("span", { class: "brand-dot" }), "Chair's Meeting Manager"]),
     nav,
@@ -905,6 +930,27 @@ function renderSetup() {
   standingBtn.addEventListener("click", () => saveAgendaForLater(true));
   standingRow.appendChild(standingBtn);
   app.appendChild(standingRow);
+
+  const resetRow = el("div", { style: "margin-top:28px;text-align:center" });
+  const resetBtn = el("button", { class: "reset-link" }, "Reset app — clear draft, saved agendas & history");
+  resetBtn.addEventListener("click", resetApp);
+  resetRow.appendChild(resetBtn);
+  app.appendChild(resetRow);
+}
+
+function resetApp() {
+  showToast({
+    kind: "confirm",
+    message: "Reset the app? This permanently deletes your current draft, all saved agendas, and all meeting history — on this device only.",
+    confirmLabel: "Reset Everything",
+    onConfirm: () => {
+      localStorage.removeItem(STORAGE_KEY);
+      state = defaultState();
+      save();
+      render();
+      showToast({ message: "App reset." });
+    },
+  });
 }
 
 function renderSectionRows(list) {
@@ -1019,13 +1065,7 @@ function renderLive() {
   const header = el("div", { class: "cockpit-header" });
   const topbar = el("div", { class: "cockpit-topbar" });
   topbar.appendChild(el("div", { class: "cockpit-brand" }, [el("span", { class: "brand-dot" }), "Chair"]));
-  const tabs = el("div", { class: "cockpit-tabs" });
-  const meetingTab = el("button", { class: "active" }, "Meeting");
-  meetingTab.addEventListener("click", () => {});
-  const historyTab = el("button", null, "History");
-  historyTab.addEventListener("click", () => switchView("history"));
-  tabs.appendChild(meetingTab);
-  tabs.appendChild(historyTab);
+  const tabs = el("div", { class: "cockpit-tabs" }, navButtons("live"));
   topbar.appendChild(tabs);
   topbar.appendChild(el("div", { class: "cockpit-topbar-right" }, [el("span", null, m.title || "Untitled Meeting")]));
   header.appendChild(topbar);
@@ -1332,8 +1372,6 @@ function railMetaText(s) {
 function railBadges(s, isNextUp) {
   const badges = [];
   if (isNextUp) badges.push(el("span", { class: "pill" }, "up next"));
-  if (s.wasExtended) badges.push(el("span", { class: "pill extended" }, "extended"));
-  if (s.wasShrunk) badges.push(el("span", { class: "pill shrunk" }, "shrunk"));
   return badges;
 }
 
