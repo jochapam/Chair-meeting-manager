@@ -1240,7 +1240,8 @@ function renderLive() {
   cockpit.appendChild(header);
 
   // Current item bar: full width, directly under the timers — not squeezed
-  // into the centre column between the agenda rail and captures rail.
+  // into the centre column between the agenda rail and captures rail. Title
+  // and controls share a single row to keep the bar's footprint small.
   const currentItemBar = el("div", { class: "current-item-bar" });
   currentItemBar.appendChild(el("div", { class: "notes-header" }, [
     el("h2", null, sec.name),
@@ -1252,7 +1253,7 @@ function renderLive() {
   btn1.addEventListener("click", () => extendCurrentSection(1));
   const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
   btn5.addEventListener("click", () => extendCurrentSection(5));
-  const customInput = el("input", { type: "number", min: "1", value: "2" });
+  const customInput = el("input", { class: "extend-input", type: "number", min: "1", value: "2", title: "Custom extend amount (minutes)" });
   const customBtn = el("button", { class: "btn btn-small" }, "Extend");
   customBtn.addEventListener("click", () => {
     const v = Math.max(1, parseInt(customInput.value, 10) || 1);
@@ -1267,10 +1268,10 @@ function renderLive() {
   notesActions.appendChild(decisionBtn);
   notesActions.appendChild(actionBtn);
   notesActions.appendChild(motionBtn);
-  notesActions.appendChild(el("div", { class: "spacer" }));
   notesActions.appendChild(btn1);
   notesActions.appendChild(btn5);
   notesActions.appendChild(customInput);
+  notesActions.appendChild(el("span", { class: "min-label" }, "min"));
   notesActions.appendChild(customBtn);
   currentItemBar.appendChild(notesActions);
   cockpit.appendChild(currentItemBar);

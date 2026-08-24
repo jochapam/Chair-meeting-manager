@@ -956,20 +956,29 @@ table.minutes-table th {
 .search-match { font-size: 0.8rem; color: var(--text-mid); margin-top: 2px; }
 .search-match mark { background: var(--accent-tint-2); color: var(--accent-dark); padding: 0 1px; }
 
-.current-item-bar { border-bottom: 2px solid var(--line); background: var(--surface); }
+.current-item-bar {
+  border-bottom: 2px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 10px 22px;
+}
 .cockpit-notes { display: flex; flex-direction: column; background: var(--bg); min-width: 0; }
-.notes-header { padding: 18px 22px 4px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-.notes-header h2 { font-size: 1.4rem; }
+.notes-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.notes-header h2 { font-size: 1.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notes-header .notes-meta {
   font-family: "Archivo Narrow", sans-serif;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-dim);
+  white-space: nowrap;
 }
-.notes-actions { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 22px 12px; align-items: center; }
-.notes-actions .spacer { flex: 1; }
-.notes-actions input { width: 56px; text-align: center; }
+.notes-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
+.notes-actions input.extend-input { width: 48px; text-align: center; }
 .cockpit-notes textarea {
   flex: 1;
   min-height: 260px;
