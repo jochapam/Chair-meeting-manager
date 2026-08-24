@@ -930,25 +930,19 @@ function renderSetup() {
   standingBtn.addEventListener("click", () => saveAgendaForLater(true));
   standingRow.appendChild(standingBtn);
   app.appendChild(standingRow);
-
-  const resetRow = el("div", { style: "margin-top:28px;text-align:center" });
-  const resetBtn = el("button", { class: "reset-link" }, "Reset app — clear draft, saved agendas & history");
-  resetBtn.addEventListener("click", resetApp);
-  resetRow.appendChild(resetBtn);
-  app.appendChild(resetRow);
 }
 
-function resetApp() {
+// Abandons the meeting currently in progress (live or paused) and returns
+// to a fresh Setup screen. Saved agendas and history are untouched — this
+// only discards the one in-flight meeting's notes/timing/captures.
+function resetMeeting() {
   showToast({
     kind: "confirm",
-    message: "Reset the app? This permanently deletes your current draft, all saved agendas, and all meeting history — on this device only.",
-    confirmLabel: "Reset Everything",
+    message: "Reset this meeting and go back to Prepare? This discards its notes, timing, and captured items.",
+    confirmLabel: "Reset Meeting",
     onConfirm: () => {
-      localStorage.removeItem(STORAGE_KEY);
-      state = defaultState();
-      save();
-      render();
-      showToast({ message: "App reset." });
+      state.meeting = null;
+      switchView("setup");
     },
   });
 }
@@ -1261,7 +1255,9 @@ function renderLive() {
     ta.selectionStart = ta.selectionEnd = ta.value.length;
   }
 
-  const endRow = el("div", { style: "padding:0 22px 14px;display:flex;justify-content:flex-end" });
+  const endRow = el("div", { style: "padding:0 22px 14px;display:flex;justify-content:flex-end;gap:8px" });
+  const resetBtn = el("button", { class: "btn" }, "Reset Meeting");
+  resetBtn.addEventListener("click", resetMeeting);
   const endBtn = el("button", { class: "btn btn-danger" }, "End Meeting");
   endBtn.addEventListener("click", () => {
     showToast({
@@ -1271,6 +1267,7 @@ function renderLive() {
       onConfirm: endMeeting,
     });
   });
+  endRow.appendChild(resetBtn);
   endRow.appendChild(endBtn);
   notes.appendChild(endRow);
 

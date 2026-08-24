@@ -683,19 +683,6 @@ table.minutes-table th {
 }
 .standing-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-mid); margin-top: 8px; }
 
-.reset-link {
-  background: none;
-  border: none;
-  padding: 6px;
-  cursor: pointer;
-  font-family: "Archivo Narrow", sans-serif;
-  font-size: 0.68rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-.reset-link:hover { color: var(--bad); text-decoration: underline; }
-
 .suggestion {
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.68rem;
