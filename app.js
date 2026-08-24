@@ -18,6 +18,7 @@ function defaultState() {
     history: [], // array of completed meeting snapshots (most recent first)
     savedAgendas: [], // array of pre-meeting drafts saved for later (most recent first)
     railWidth: 280, // user-resizable width of the live view's agenda rail, in px
+    capturesWidth: 260, // user-resizable width of the live view's captured rail, in px
   };
 }
 
@@ -729,24 +730,26 @@ function enableDragReorder(container, rowSelector, onDrop) {
   });
 }
 
-const RAIL_MIN_WIDTH = 200;
-const RAIL_MAX_WIDTH = 520;
+const PANEL_MIN_WIDTH = 200;
+const PANEL_MAX_WIDTH = 520;
 
-// Drags the agenda rail's width via the --rail-w custom property (rather
-// than setting grid-template-columns inline), so the narrow-viewport media
-// query that collapses the grid to a single column can still win — an
-// inline grid-template-columns would out-specificity it at any width.
-// Mutates live during the drag for a smooth feel; only writes to state
-// (+ saves) on release, since a full renderLive() mid-drag would fight the
-// pointer capture.
-function enableRailResize(handle, bodyEl) {
+// Drags a side panel's width via a CSS custom property (rather than setting
+// grid-template-columns inline), so the narrow-viewport media query that
+// collapses the grid to a single column can still win — an inline
+// grid-template-columns would out-specificity it at any width. Mutates live
+// during the drag for a smooth feel; only writes to state (+ saves) on
+// release, since a full renderLive() mid-drag would fight the pointer
+// capture. `invert` is for a panel on the right edge (captures rail),
+// where dragging left (negative dx) is what widens it.
+function enablePanelResize(handle, bodyEl, { cssVar, stateKey, defaultWidth, invert }) {
   let startX = 0;
   let startWidth = 0;
   let currentWidth = 0;
+  const sign = invert ? -1 : 1;
 
   function onPointerMove(e) {
-    currentWidth = Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, startWidth + (e.clientX - startX)));
-    bodyEl.style.setProperty("--rail-w", `${currentWidth}px`);
+    currentWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, startWidth + sign * (e.clientX - startX)));
+    bodyEl.style.setProperty(cssVar, `${currentWidth}px`);
   }
 
   function onPointerUp(e) {
@@ -756,7 +759,7 @@ function enableRailResize(handle, bodyEl) {
     document.removeEventListener("pointerup", onPointerUp);
     document.removeEventListener("pointercancel", onPointerUp);
     if (currentWidth > 0) {
-      state.railWidth = currentWidth;
+      state[stateKey] = currentWidth;
       save();
     }
   }
@@ -764,7 +767,7 @@ function enableRailResize(handle, bodyEl) {
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     startX = e.clientX;
-    startWidth = state.railWidth || 280;
+    startWidth = state[stateKey] || defaultWidth;
     currentWidth = startWidth;
     handle.classList.add("dragging");
     handle.setPointerCapture(e.pointerId);
@@ -1243,33 +1246,52 @@ function renderLive() {
   header.appendChild(topbar);
 
   // Current item bar: the primary thing on screen — what are we on right
-  // now — appears first and largest. Timing is supporting detail below it.
+  // now, and how is it doing — appears first and largest. Its own
+  // countdown lives here too (not in the timing row below) since it's
+  // about this item specifically, and it's the number a chair actually
+  // watches most.
   const currentItemBar = el("div", { class: "current-item-bar" });
-  currentItemBar.appendChild(el("div", { class: "notes-header" }, [
+  const itemBarTop = el("div", { class: "item-bar-top" });
+  itemBarTop.appendChild(el("div", { class: "notes-header" }, [
     el("h2", null, sec.name),
-    el("div", { class: "notes-meta" }, `Item ${m.currentIndex + 1} of ${m.sections.length} · Budget ${fmtMinutes(sec.plannedSeconds)}`),
+    el("div", { class: "notes-meta" }, `${m.currentIndex + 1}/${m.sections.length} · ${fmtMinutes(sec.plannedSeconds)}`),
   ]));
 
+  const itemTimerBlock = el("div", { class: "item-timer-block" });
+  const remainValueClass = isOvertime ? "item-timer-value overtime" : (pct > 85 ? "item-timer-value warn" : "item-timer-value");
+  const remainValueEl = el("div", { id: "timer-display", class: remainValueClass }, fmtClock(remaining));
+  itemTimerBlock.appendChild(remainValueEl);
   const notesActions = el("div", { class: "notes-actions" });
   const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
   btn1.addEventListener("click", () => extendCurrentSection(1));
   const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
   btn5.addEventListener("click", () => extendCurrentSection(5));
+  notesActions.appendChild(btn1);
+  notesActions.appendChild(btn5);
+  itemTimerBlock.appendChild(notesActions);
+  itemBarTop.appendChild(itemTimerBlock);
+  currentItemBar.appendChild(itemBarTop);
+
+  const track = el("div", { class: "progress-track" });
+  const fillEl = el("div", { id: "progress-fill", class: "progress-fill" + (isOvertime ? " overtime" : ""), style: `width:${pct}%` });
+  track.appendChild(fillEl);
+  currentItemBar.appendChild(track);
+
+  // Decision/Action/Motion move to the footer row below the notes, next to
+  // Reset/End Meeting — they're about filing a note, not about the item
+  // header, so they sit with the other end-of-note actions instead of
+  // crowding the title.
   const decisionBtn = el("button", { class: "btn btn-small" }, "Decision");
   decisionBtn.addEventListener("click", () => stampFromToolbar("decision"));
   const actionBtn = el("button", { class: "btn btn-small" }, "Action");
   actionBtn.addEventListener("click", () => stampFromToolbar("action"));
   const motionBtn = el("button", { class: "btn btn-small" }, "Motion");
   motionBtn.addEventListener("click", () => stampFromToolbar("motion"));
-  notesActions.appendChild(decisionBtn);
-  notesActions.appendChild(actionBtn);
-  notesActions.appendChild(motionBtn);
-  notesActions.appendChild(btn1);
-  notesActions.appendChild(btn5);
-  currentItemBar.appendChild(notesActions);
+
   header.appendChild(currentItemBar);
 
-  // Timing: supporting detail, smaller than the item bar above it.
+  // Timing: supporting meeting-level context, smaller than the item bar
+  // above it.
   const hero = el("div", { class: "cockpit-hero" });
 
   const planStat = el("div", { class: "hero-stat" });
@@ -1277,26 +1299,13 @@ function renderLive() {
   const badgeInfo0 = scheduleBadgeInfo();
   const scheduleBadgeEl = el("div", { id: "schedule-badge", class: `hero-value hero-big schedule-badge ${badgeInfo0.cls}` }, badgeInfo0.word);
   planStat.appendChild(scheduleBadgeEl);
-  planStat.appendChild(el("div", { class: "hero-sub" }, isOvertime ? "auto-adjusting agenda" : " "));
   hero.appendChild(planStat);
 
   const endStat = el("div", { class: "hero-stat" });
   endStat.appendChild(el("div", { class: "hero-label" }, "Projected end"));
   const projectedEndEl = el("div", { id: "projected-end", class: "hero-value" }, fmtTimeOfDay(stats.projectedEndTs));
   endStat.appendChild(projectedEndEl);
-  endStat.appendChild(el("div", { class: "hero-sub" }, `was ${fmtTimeOfDay(stats.originalEndTs)}`));
   hero.appendChild(endStat);
-
-  const remainStat = el("div", { class: "hero-stat" });
-  remainStat.appendChild(el("div", { class: "hero-label" }, sec.name));
-  const remainValueClass = isOvertime ? "hero-value hero-small overtime" : (pct > 85 ? "hero-value hero-small warn" : "hero-value hero-small");
-  const remainValueEl = el("div", { id: "timer-display", class: remainValueClass }, fmtClock(remaining));
-  remainStat.appendChild(remainValueEl);
-  const track = el("div", { class: "progress-track" });
-  const fillEl = el("div", { id: "progress-fill", class: "progress-fill" + (isOvertime ? " overtime" : ""), style: `width:${pct}%` });
-  track.appendChild(fillEl);
-  remainStat.appendChild(track);
-  hero.appendChild(remainStat);
 
   const heroActions = el("div", { class: "hero-actions" });
   const pauseBtn = el("button", null, m.timerStatus === "running" ? "Pause" : "Resume");
@@ -1331,8 +1340,9 @@ function renderLive() {
   cockpit.appendChild(header);
 
   /* ---- body: agenda rail + notes centre + captures rail ---- */
-  const railWidth = Math.max(RAIL_MIN_WIDTH, Math.min(RAIL_MAX_WIDTH, state.railWidth || 280));
-  const body = el("div", { class: "cockpit-body", style: `--rail-w: ${railWidth}px` });
+  const railWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, state.railWidth || 280));
+  const capturesWidth = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, state.capturesWidth || 260));
+  const body = el("div", { class: "cockpit-body", style: `--rail-w: ${railWidth}px; --captures-w: ${capturesWidth}px` });
 
   const rail = el("aside", { class: "cockpit-rail" });
   const doneCount = m.sections.filter(s => s.status === "done").length;
@@ -1392,7 +1402,7 @@ function renderLive() {
 
   const railResizeHandle = el("div", { class: "rail-resize-handle", title: "Drag to resize the agenda panel" });
   rail.appendChild(railResizeHandle);
-  enableRailResize(railResizeHandle, body);
+  enablePanelResize(railResizeHandle, body, { cssVar: "--rail-w", stateKey: "railWidth", defaultWidth: 280, invert: false });
 
   body.appendChild(rail);
 
@@ -1424,7 +1434,14 @@ function renderLive() {
     ta.selectionStart = ta.selectionEnd = ta.value.length;
   }
 
-  const endRow = el("div", { style: "padding:0 22px 14px;display:flex;justify-content:flex-end;gap:8px" });
+  const endRow = el("div", { style: "padding:0 22px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap" });
+  const stampGroup = el("div", { style: "display:flex;gap:8px" });
+  stampGroup.appendChild(decisionBtn);
+  stampGroup.appendChild(actionBtn);
+  stampGroup.appendChild(motionBtn);
+  endRow.appendChild(stampGroup);
+
+  const footerActions = el("div", { style: "display:flex;gap:8px" });
   const resetBtn = el("button", { class: "btn" }, "Reset Meeting");
   resetBtn.addEventListener("click", resetMeeting);
   const endBtn = el("button", { class: "btn btn-danger" }, "End Meeting");
@@ -1436,8 +1453,9 @@ function renderLive() {
       onConfirm: endMeeting,
     });
   });
-  endRow.appendChild(resetBtn);
-  endRow.appendChild(endBtn);
+  footerActions.appendChild(resetBtn);
+  footerActions.appendChild(endBtn);
+  endRow.appendChild(footerActions);
   notes.appendChild(endRow);
 
   notes.appendChild(el("div", { class: "kbd-hint" }, "Space pause · → next · + extend · B break · D/A/M stamp (when not typing) · /decision /action /motion in notes"));
@@ -1445,6 +1463,9 @@ function renderLive() {
   body.appendChild(notes);
 
   const capturesRail = el("aside", { id: "captures-rail", class: "captures-rail" });
+  const capturesResizeHandle = el("div", { class: "captures-resize-handle", title: "Drag to resize the captured panel" });
+  capturesRail.appendChild(capturesResizeHandle);
+  enablePanelResize(capturesResizeHandle, body, { cssVar: "--captures-w", stateKey: "capturesWidth", defaultWidth: 260, invert: true });
   capturesRail.appendChild(el("div", { class: "rail-header" }, [el("span", null, "Captured"), el("span", { id: "captures-count" }, String((m.captures || []).length))]));
   const capturesList = el("div", { id: "captures-list" });
   renderCapturesList(capturesList);
@@ -1563,7 +1584,7 @@ function updateLiveDisplays(reclaimHappened) {
   if (!timeEl) { clearTick(); return; }
 
   timeEl.textContent = fmtClock(remaining);
-  timeEl.className = "hero-value hero-small" + (isOvertime ? " overtime" : (pct > 85 ? " warn" : ""));
+  timeEl.className = "item-timer-value" + (isOvertime ? " overtime" : (pct > 85 ? " warn" : ""));
   if (fillEl) {
     fillEl.style.width = pct + "%";
     fillEl.className = "progress-fill" + (isOvertime ? " overtime" : "");

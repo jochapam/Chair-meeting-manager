@@ -670,7 +670,7 @@ table.minutes-table th {
 
 .cockpit-hero {
   display: grid;
-  grid-template-columns: 1.2fr 1.2fr 1.4fr auto;
+  grid-template-columns: 1fr 1fr auto;
   background: var(--surface-2);
 }
 .hero-stat { padding: 10px 16px 12px; min-width: 0; }
@@ -695,16 +695,6 @@ table.minutes-table th {
 .hero-value.overtime, .hero-value.behind { color: var(--bad); }
 .hero-value.ahead { color: var(--good); }
 .hero-value.hero-big { font-size: 1.5rem; }
-.hero-value.hero-small { font-size: 1.05rem; }
-.hero-sub {
-  font-family: "Archivo Narrow", sans-serif;
-  font-size: 0.6rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-top: 2px;
-}
-.hero-stat .progress-track { margin-top: 6px; }
 
 .hero-actions { display: flex; align-items: stretch; }
 .hero-actions button {
@@ -765,7 +755,7 @@ table.minutes-table th {
 .realloc-strip .realloc-actions button:last-child { border-right: none; }
 .realloc-strip .realloc-actions button:hover { background: var(--line-soft); }
 
-.cockpit-body { flex: 1; display: grid; grid-template-columns: var(--rail-w, 280px) 1fr 260px; align-items: stretch; }
+.cockpit-body { flex: 1; display: grid; grid-template-columns: var(--rail-w, 280px) 1fr var(--captures-w, 260px); align-items: stretch; }
 .cockpit-body.no-captures { grid-template-columns: 300px 1fr; }
 
 .cockpit-rail {
@@ -852,11 +842,23 @@ table.minutes-table th {
 }
 
 .captures-rail {
+  position: relative;
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
+.captures-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 15;
+  touch-action: none;
+}
+.captures-resize-handle:hover, .captures-resize-handle.dragging { background: var(--accent-tint); }
 .captures-empty { padding: 16px 14px; font-size: 0.8rem; line-height: 1.5; color: var(--text-dim); }
 .captures-empty code { color: var(--accent-dark); font-family: "Archivo Narrow", sans-serif; }
 .capture-item { padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
@@ -975,16 +977,12 @@ table.minutes-table th {
 .current-item-bar {
   border-bottom: 2px solid var(--line);
   background: var(--surface);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px 20px;
-  padding: 10px 22px;
+  padding: 18px 22px 14px;
 }
+.item-bar-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; }
 .cockpit-notes { display: flex; flex-direction: column; background: var(--bg); min-width: 0; }
 .notes-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
-.notes-header h2 { font-size: 1.6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-header h2 { font-size: 1.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notes-header .notes-meta {
   font-family: "Archivo Narrow", sans-serif;
   font-size: 0.66rem;
@@ -993,6 +991,19 @@ table.minutes-table th {
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* The item's own countdown — sized to match its importance: it's the
+   number a chair actually watches most while an item is running. */
+.item-timer-block { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.item-timer-value {
+  font-family: "Archivo Narrow", sans-serif;
+  font-size: 2.1rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+.item-timer-value.overtime { color: var(--bad); }
+.item-timer-value.warn { color: var(--warn); }
+.current-item-bar .progress-track { margin-top: 12px; }
 .notes-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
 .cockpit-notes textarea {
   flex: 1;
@@ -1010,7 +1021,7 @@ table.minutes-table th {
   .cockpit-body { grid-template-columns: 260px 1fr; }
   .captures-rail { border-left: none; border-top: 2px solid var(--line); max-height: 260px; }
   .cockpit-body { grid-template-rows: auto auto auto; }
-  .rail-resize-handle { display: none; }
+  .rail-resize-handle, .captures-resize-handle { display: none; }
 }
 
 @media (max-width: 900px) {
