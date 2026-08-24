@@ -103,6 +103,7 @@ function newSection(name, minutes) {
     notes: "",
     wasExtended: false,
     wasShrunk: false,
+    autoReclaimed: 0, // seconds already pulled from upcoming sections due to running overtime
   };
 }
 
@@ -559,7 +560,7 @@ function renderLive() {
 
   timerCard.appendChild(el("div", { class: "meeting-meta" }, [
     el("span", null, `Planned: ${fmtMinutes(sec.plannedSeconds)}`),
-    el("span", null, isOvertime ? "OVER TIME" : `${Math.max(0, Math.round(100 - pct))}% remaining`),
+    el("span", null, isOvertime ? "OVER TIME — auto-adjusting agenda" : `${Math.max(0, Math.round(100 - pct))}% remaining`),
   ]));
 
   const controlRow = el("div", { class: "control-row" });
@@ -660,12 +661,29 @@ function startTick() {
     if (!m || m.timerStatus !== "running") return;
     const sec = currentSection();
     if (!sec) return;
-    const remaining = sec.plannedSeconds - elapsedSeconds(sec);
+
+    // Running past the planned time auto-extends this section by pulling
+    // the overage from upcoming sections, continuously, until "Next
+    // Section" locks in the actual time used.
+    const elapsed = elapsedSeconds(sec);
+    const overage = elapsed - sec.plannedSeconds;
+    const alreadyReclaimed = sec.autoReclaimed;
+    const toReclaim = overage - alreadyReclaimed;
+    if (toReclaim > 0.5) {
+      shrinkUpcomingSections(toReclaim);
+      sec.autoReclaimed = alreadyReclaimed + toReclaim;
+      sec.wasExtended = true;
+      save();
+      renderLive(); // full refresh so the shrinking agenda list is visible; focus-preserving
+      return;
+    }
+
+    const remaining = sec.plannedSeconds - elapsed;
     const timeEl = document.getElementById("timer-display");
     const fillEl = document.getElementById("progress-fill");
     if (timeEl) {
       timeEl.textContent = fmtClock(remaining);
-      const pct = Math.min(100, Math.max(0, (elapsedSeconds(sec) / sec.plannedSeconds) * 100));
+      const pct = Math.min(100, Math.max(0, (elapsed / sec.plannedSeconds) * 100));
       timeEl.className = remaining < 0 ? "timer-display overtime" : (pct > 85 ? "timer-display warn" : "timer-display");
       if (fillEl) {
         fillEl.style.width = pct + "%";
