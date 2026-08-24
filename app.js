@@ -9,6 +9,7 @@ const MIN_SECTION_SECONDS = 60; // a section can never be auto-shrunk below this
 
 let state = loadState();
 let tickHandle = null;
+let liveRefs = null; // DOM references for surgical per-second updates on the live view
 
 function defaultState() {
   return {
@@ -66,6 +67,10 @@ function fmtDateTime(ts) {
   });
 }
 
+function fmtTimeOfDay(ts) {
+  return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
 /* ---------- agenda text import ---------- */
 
 // Parses lines like "1.2 In camera session   10mins" (tab, spaces, or a
@@ -121,6 +126,8 @@ function newMeeting() {
     generalNotes: "",
     decisions: [],
     actionItems: [],
+    breaks: [], // {startedAt, endedAt} — endedAt null while a break is in progress
+    agendaExhausted: false, // true once an overrun couldn't be fully absorbed (upcoming sections floored)
   };
 }
 
@@ -129,7 +136,7 @@ function newMeeting() {
 function saveAgendaForLater() {
   const m = state.meeting;
   if (m.sections.length === 0) {
-    alert("Add at least one agenda section before saving.");
+    showToast({ message: "Add at least one agenda section before saving.", kind: "warning" });
     return;
   }
   state.savedAgendas.unshift({
@@ -140,27 +147,48 @@ function saveAgendaForLater() {
     savedAt: Date.now(),
   });
   save();
+  renderSetup();
+  showToast({ message: `Saved "${m.title || "Untitled Meeting"}" for later.` });
 }
 
 function loadSavedAgenda(id) {
   const saved = state.savedAgendas.find(a => a.id === id);
   if (!saved) return;
   const m = state.meeting;
-  if (m.sections.length > 0 && !confirm(`Load "${saved.title || "Untitled Meeting"}"? This replaces your current unsaved draft.`)) return;
-  m.title = saved.title;
-  m.attendees = saved.attendees;
-  m.sections = JSON.parse(JSON.stringify(saved.sections));
-  save();
-  renderSetup();
+  const applyLoad = () => {
+    m.title = saved.title;
+    m.attendees = saved.attendees;
+    m.sections = JSON.parse(JSON.stringify(saved.sections));
+    save();
+    renderSetup();
+  };
+  if (m.sections.length > 0) {
+    showToast({
+      kind: "confirm",
+      message: `Load "${saved.title || "Untitled Meeting"}"? This replaces your current draft.`,
+      confirmLabel: "Load",
+      onConfirm: applyLoad,
+    });
+  } else {
+    applyLoad();
+  }
 }
 
 function deleteSavedAgenda(id) {
   const idx = state.savedAgendas.findIndex(a => a.id === id);
   if (idx === -1) return;
-  if (!confirm("Delete this saved agenda?")) return;
-  state.savedAgendas.splice(idx, 1);
+  const [removed] = state.savedAgendas.splice(idx, 1);
   save();
   renderSetup();
+  showToast({
+    kind: "undo",
+    message: `Deleted "${removed.title || "Untitled Meeting"}".`,
+    onUndo: () => {
+      state.savedAgendas.splice(idx, 0, removed);
+      save();
+      renderSetup();
+    },
+  });
 }
 
 function currentSection() {
@@ -200,11 +228,11 @@ function scheduleVarianceSeconds() {
 
 function scheduleBadgeInfo() {
   const diff = scheduleVarianceSeconds();
-  if (Math.abs(diff) < 30) return { text: "On schedule", cls: "on" };
+  if (Math.abs(diff) < 30) return { text: "On schedule", word: "ON PLAN", cls: "on" };
   const mins = Math.round(Math.abs(diff) / 60);
   return diff > 0
-    ? { text: `${mins} min behind schedule`, cls: "behind" }
-    : { text: `${mins} min ahead of schedule`, cls: "ahead" };
+    ? { text: `${mins} min behind schedule`, word: `+${mins}m BEHIND`, cls: "behind" }
+    : { text: `${mins} min ahead of schedule`, word: `${mins}m AHEAD`, cls: "ahead" };
 }
 
 /* ---------- proportional shrink ---------- */
@@ -234,13 +262,23 @@ function shrinkUpcomingSections(neededSeconds) {
   return neededSeconds - remaining; // amount actually reclaimed
 }
 
+// Runs a reclaim attempt and updates the "agenda can't absorb more time"
+// flag based on whether it fully succeeded — surfacing the moment the
+// plan stops being physically possible, instead of failing silently.
+function reclaimTime(neededSeconds) {
+  const m = state.meeting;
+  const reclaimed = shrinkUpcomingSections(neededSeconds);
+  m.agendaExhausted = reclaimed < neededSeconds - 0.5;
+  return reclaimed;
+}
+
 function extendCurrentSection(minutes) {
   const sec = currentSection();
   if (!sec) return;
   const addSeconds = minutes * 60;
   sec.plannedSeconds += addSeconds;
   sec.wasExtended = true;
-  shrinkUpcomingSections(addSeconds);
+  reclaimTime(addSeconds);
   save();
   renderLive();
 }
@@ -271,7 +309,26 @@ function togglePause() {
   } else if (m.timerStatus === "paused") {
     sec.startedAt = Date.now();
     m.timerStatus = "running";
+    const openBreak = m.breaks[m.breaks.length - 1];
+    if (openBreak && openBreak.endedAt === null) openBreak.endedAt = Date.now();
   }
+  save();
+  renderLive();
+}
+
+// A break is a labeled pause: it stops the item clock exactly like Pause,
+// but is recorded so the minutes can show it, rather than a recess being
+// silently absorbed into whichever section happens to be running.
+function takeBreak() {
+  const m = state.meeting;
+  const sec = currentSection();
+  if (!sec) return;
+  if (m.timerStatus === "running") {
+    sec.pausedAccum = elapsedSeconds(sec);
+    sec.startedAt = null;
+    m.timerStatus = "paused";
+  }
+  m.breaks.push({ startedAt: Date.now(), endedAt: null });
   save();
   renderLive();
 }
@@ -326,6 +383,10 @@ function buildMinutesMarkdown(m) {
   const totalActual = m.sections.reduce((s, x) => s + (x.actualSeconds ?? x.plannedSeconds), 0);
   lines.push(`- **Planned duration:** ${fmtMinutes(totalPlanned)}`);
   lines.push(`- **Actual duration:** ${fmtMinutes(totalActual)}`);
+  if (m.breaks && m.breaks.length) {
+    const totalBreakSec = m.breaks.reduce((s, b) => s + ((b.endedAt || Date.now()) - b.startedAt) / 1000, 0);
+    lines.push(`- **Breaks:** ${m.breaks.length} (${fmtMinutes(totalBreakSec)} total)`);
+  }
   lines.push("");
 
   lines.push("## Agenda & Timing");
@@ -488,13 +549,55 @@ function enableDragReorder(container, rowSelector, onDrop) {
   });
 }
 
+/* ---------- toast (replaces native confirm()/alert()) ---------- */
+
+let toastEl = null;
+let toastTimer = null;
+
+function ensureToastEl() {
+  if (toastEl) return toastEl;
+  toastEl = document.createElement("div");
+  toastEl.className = "toast";
+  document.body.appendChild(toastEl);
+  return toastEl;
+}
+
+function hideToast() {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  if (toastEl) toastEl.classList.remove("visible");
+}
+
+// kind: "info" | "warning" | "confirm" | "undo"
+function showToast({ message, kind = "info", confirmLabel = "Confirm", onConfirm, onCancel, onUndo, duration }) {
+  const t = ensureToastEl();
+  if (toastTimer) clearTimeout(toastTimer);
+  t.innerHTML = "";
+  t.className = `toast visible toast-${kind}`;
+  t.appendChild(el("span", { class: "toast-msg" }, message));
+  if (kind === "confirm") {
+    const confirmBtn = el("button", { class: "btn btn-primary" }, confirmLabel);
+    confirmBtn.addEventListener("click", () => { hideToast(); if (onConfirm) onConfirm(); });
+    const cancelBtn = el("button", { class: "btn" }, "Cancel");
+    cancelBtn.addEventListener("click", () => { hideToast(); if (onCancel) onCancel(); });
+    t.appendChild(confirmBtn);
+    t.appendChild(cancelBtn);
+  } else if (kind === "undo") {
+    const undoBtn = el("button", { class: "btn" }, "Undo");
+    undoBtn.addEventListener("click", () => { hideToast(); if (onUndo) onUndo(); });
+    t.appendChild(undoBtn);
+    toastTimer = setTimeout(hideToast, duration || 7000);
+  } else {
+    toastTimer = setTimeout(hideToast, duration || 4000);
+  }
+}
+
 function switchView(view) {
   state.view = view;
   save();
   render();
 }
 
-/* ---------- top nav ---------- */
+/* ---------- top nav (setup / minutes / history — live view has its own header) ---------- */
 
 function renderTopbar(activeView) {
   const nav = el("div", { class: "nav-links" }, [
@@ -508,7 +611,7 @@ function renderTopbar(activeView) {
     }, "History"),
   ]);
   return el("div", { class: "topbar" }, [
-    el("h1", null, "⏱️ Chair's Meeting Manager"),
+    el("h1", null, [el("span", { class: "brand-dot" }), "Chair's Meeting Manager"]),
     nav,
   ]);
 }
@@ -634,14 +737,14 @@ function renderSetup() {
   app.appendChild(agendaCard);
 
   const actionRow = el("div", { class: "row" });
-  const saveForLaterBtn = el("button", { class: "btn", style: "padding:12px" }, "💾 Save for Later");
-  saveForLaterBtn.addEventListener("click", () => {
-    saveAgendaForLater();
-    renderSetup();
-  });
-  const startBtn = el("button", { class: "btn btn-primary", style: "flex:1;padding:12px;font-size:1rem" }, "Start Meeting ▶");
+  const saveForLaterBtn = el("button", { class: "btn", style: "padding:12px" }, "Save for Later");
+  saveForLaterBtn.addEventListener("click", saveAgendaForLater);
+  const startBtn = el("button", { class: "btn btn-primary", style: "flex:1;padding:12px;font-size:1rem" }, "Start Meeting");
   startBtn.addEventListener("click", () => {
-    if (m.sections.length === 0) { alert("Add at least one agenda section first."); return; }
+    if (m.sections.length === 0) {
+      showToast({ message: "Add at least one agenda section first.", kind: "warning" });
+      return;
+    }
     startMeeting();
   });
   actionRow.appendChild(saveForLaterBtn);
@@ -673,9 +776,20 @@ function renderSectionRows(list) {
 
     const delBtn = el("button", { class: "btn-icon btn-danger", title: "Remove" }, "✕");
     delBtn.addEventListener("click", () => {
-      m.sections.splice(m.sections.indexOf(s), 1);
+      const idx = m.sections.indexOf(s);
+      if (idx === -1) return;
+      m.sections.splice(idx, 1);
       save();
       renderSetup();
+      showToast({
+        kind: "undo",
+        message: `Removed "${s.name}".`,
+        onUndo: () => {
+          m.sections.splice(idx, 0, s);
+          save();
+          renderSetup();
+        },
+      });
     });
 
     row.appendChild(handle);
@@ -693,90 +807,15 @@ function renderSectionRows(list) {
   });
 }
 
-/* ---------- LIVE VIEW ---------- */
+/* ---------- LIVE VIEW (cockpit) ---------- */
 
-function renderLive() {
+// Everything a render or a tick needs to know about "right now."
+function computeLiveStats() {
   const m = state.meeting;
-  if (!m || m.currentIndex < 0) { switchView("setup"); return; }
-
-  const focusInfo = captureFocus();
-
-  app.innerHTML = "";
-  app.appendChild(renderTopbar("live"));
-
-  app.appendChild(el("h2", { style: "margin-bottom:2px" }, m.title || "Untitled Meeting"));
-
   const sec = currentSection();
-  const remaining = sec.plannedSeconds - elapsedSeconds(sec);
-  const isOvertime = remaining < 0;
-  const pct = Math.min(100, Math.max(0, (elapsedSeconds(sec) / sec.plannedSeconds) * 100));
-
-  const timerCard = el("div", { class: "card timer-card" });
-  timerCard.appendChild(el("div", { class: "section-name" }, `${m.currentIndex + 1}. ${sec.name}`));
-  const displayClass = isOvertime ? "timer-display overtime" : (pct > 85 ? "timer-display warn" : "timer-display");
-  const timeEl = el("div", { id: "timer-display", class: displayClass }, fmtClock(remaining));
-  timerCard.appendChild(timeEl);
-
-  const track = el("div", { class: "progress-track" });
-  const fill = el("div", { id: "progress-fill", class: "progress-fill" + (isOvertime ? " overtime" : ""), style: `width:${pct}%` });
-  track.appendChild(fill);
-  timerCard.appendChild(track);
-
-  timerCard.appendChild(el("div", { class: "meeting-meta" }, [
-    el("span", null, `Planned: ${fmtMinutes(sec.plannedSeconds)}`),
-    el("span", null, isOvertime ? "OVER TIME — auto-adjusting agenda" : `${Math.max(0, Math.round(100 - pct))}% remaining`),
-  ]));
-
-  const badgeInfo = scheduleBadgeInfo();
-  timerCard.appendChild(el("div", { id: "schedule-badge", class: `schedule-badge ${badgeInfo.cls}` }, badgeInfo.text));
-
-  const controlRow = el("div", { class: "control-row" });
-  const pauseBtn = el("button", { class: "btn" }, m.timerStatus === "running" ? "⏸ Pause" : "▶ Resume");
-  pauseBtn.addEventListener("click", togglePause);
-  const nextBtn = el("button", { class: "btn btn-primary" },
-    m.currentIndex === m.sections.length - 1 ? "Finish Meeting →" : "Next Section →");
-  nextBtn.addEventListener("click", goToNextSection);
-  const endBtn = el("button", { class: "btn btn-danger" }, "End Meeting");
-  endBtn.addEventListener("click", () => {
-    if (confirm("End the meeting now and go to notes & minutes?")) endMeeting();
-  });
-  controlRow.appendChild(pauseBtn);
-  controlRow.appendChild(nextBtn);
-  controlRow.appendChild(endBtn);
-  timerCard.appendChild(controlRow);
-
-  const extendRow = el("div", { class: "extend-row" });
-  extendRow.appendChild(el("span", { style: "color:var(--text-dim);font-size:0.85rem" }, "Extend this section:"));
-  const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
-  btn1.addEventListener("click", () => extendCurrentSection(1));
-  const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
-  btn5.addEventListener("click", () => extendCurrentSection(5));
-  const customInput = el("input", { type: "number", min: "1", value: "2" });
-  const customBtn = el("button", { class: "btn btn-small" }, "Extend");
-  customBtn.addEventListener("click", () => {
-    const v = Math.max(1, parseInt(customInput.value, 10) || 1);
-    extendCurrentSection(v);
-  });
-  extendRow.appendChild(btn1);
-  extendRow.appendChild(btn5);
-  extendRow.appendChild(customInput);
-  extendRow.appendChild(customBtn);
-  timerCard.appendChild(extendRow);
-
-  app.appendChild(timerCard);
-
-  // notes for current section
-  const notesCard = el("div", { class: "card" });
-  notesCard.appendChild(el("label", null, `Notes for "${sec.name}"`));
-  const notesArea = el("textarea", { placeholder: "Capture points, decisions, or follow-ups for this section..." }, sec.notes);
-  notesArea.value = sec.notes;
-  notesArea.addEventListener("input", (e) => { sec.notes = e.target.value; save(); });
-  notesCard.appendChild(notesArea);
-  app.appendChild(notesCard);
-
-  // full agenda overview
-  const agendaCard = el("div", { class: "card" });
-  agendaCard.appendChild(el("h3", null, "Agenda"));
+  const elapsed = elapsedSeconds(sec);
+  const remaining = sec.plannedSeconds - elapsed;
+  const pct = Math.min(100, Math.max(0, (elapsed / sec.plannedSeconds) * 100));
   const totalElapsedSoFar = m.sections.reduce((s, x) => {
     if (x.status === "done") return s + x.actualSeconds;
     if (x.status === "current") return s + elapsedSeconds(x);
@@ -788,12 +827,97 @@ function renderLive() {
     return s + x.plannedSeconds;
   }, 0);
   const projectedEndTs = Date.now() + Math.max(0, projectedRemainingTotal) * 1000;
+  const originalEndTs = (m.createdAt || Date.now()) + m.sections.reduce((s, x) => s + x.originalPlannedSeconds, 0) * 1000;
+  return { sec, elapsed, remaining, pct, totalElapsedSoFar, projectedEndTs, originalEndTs };
+}
 
-  agendaCard.appendChild(el("div", { class: "meeting-meta", style: "margin-bottom:6px" }, [
-    el("span", null, `Elapsed: ${fmtClock(totalElapsedSoFar)}`),
-    el("span", null, `Projected end: ${new Date(projectedEndTs).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`),
+function renderLive() {
+  const m = state.meeting;
+  if (!m || m.currentIndex < 0) { switchView("setup"); return; }
+
+  const focusInfo = captureFocus();
+  liveRefs = { railMeta: new Map(), railBadges: new Map() };
+
+  const stats = computeLiveStats();
+  const { sec, remaining, pct } = stats;
+  const isOvertime = remaining < 0;
+
+  app.innerHTML = "";
+  const cockpit = el("div", { class: "cockpit" });
+
+  /* ---- header ---- */
+  const header = el("div", { class: "cockpit-header" });
+  const topbar = el("div", { class: "cockpit-topbar" });
+  topbar.appendChild(el("div", { class: "cockpit-brand" }, [el("span", { class: "brand-dot" }), "Chair"]));
+  const tabs = el("div", { class: "cockpit-tabs" });
+  const meetingTab = el("button", { class: "active" }, "Meeting");
+  meetingTab.addEventListener("click", () => {});
+  const historyTab = el("button", null, "History");
+  historyTab.addEventListener("click", () => switchView("history"));
+  tabs.appendChild(meetingTab);
+  tabs.appendChild(historyTab);
+  topbar.appendChild(tabs);
+  topbar.appendChild(el("div", { class: "cockpit-topbar-right" }, [el("span", null, m.title || "Untitled Meeting")]));
+  header.appendChild(topbar);
+
+  const hero = el("div", { class: "cockpit-hero" });
+
+  const remainStat = el("div", { class: "hero-stat" });
+  remainStat.appendChild(el("div", { class: "hero-label" }, sec.name));
+  const remainValueClass = isOvertime ? "hero-value overtime" : (pct > 85 ? "hero-value warn" : "hero-value");
+  const remainValueEl = el("div", { id: "timer-display", class: remainValueClass }, fmtClock(remaining));
+  remainStat.appendChild(remainValueEl);
+  const track = el("div", { class: "progress-track" });
+  const fillEl = el("div", { id: "progress-fill", class: "progress-fill" + (isOvertime ? " overtime" : ""), style: `width:${pct}%` });
+  track.appendChild(fillEl);
+  remainStat.appendChild(track);
+  hero.appendChild(remainStat);
+
+  const endStat = el("div", { class: "hero-stat" });
+  endStat.appendChild(el("div", { class: "hero-label" }, "Projected end"));
+  const projectedEndEl = el("div", { id: "projected-end", class: "hero-value" }, fmtTimeOfDay(stats.projectedEndTs));
+  endStat.appendChild(projectedEndEl);
+  endStat.appendChild(el("div", { class: "hero-sub" }, `was ${fmtTimeOfDay(stats.originalEndTs)}`));
+  hero.appendChild(endStat);
+
+  const planStat = el("div", { class: "hero-stat" });
+  planStat.appendChild(el("div", { class: "hero-label" }, "Against plan"));
+  const badgeInfo0 = scheduleBadgeInfo();
+  const scheduleBadgeEl = el("div", { id: "schedule-badge", class: `hero-value schedule-badge ${badgeInfo0.cls}` }, badgeInfo0.word);
+  planStat.appendChild(scheduleBadgeEl);
+  planStat.appendChild(el("div", { class: "hero-sub" }, isOvertime ? "auto-adjusting agenda" : " "));
+  hero.appendChild(planStat);
+
+  const heroActions = el("div", { class: "hero-actions" });
+  const pauseBtn = el("button", null, m.timerStatus === "running" ? "Pause" : "Resume");
+  pauseBtn.addEventListener("click", togglePause);
+  const breakBtn = el("button", null, "Break");
+  breakBtn.addEventListener("click", takeBreak);
+  const nextBtn = el("button", { class: "primary" }, m.currentIndex === m.sections.length - 1 ? "Finish Meeting" : "Next Section");
+  nextBtn.addEventListener("click", goToNextSection);
+  heroActions.appendChild(pauseBtn);
+  heroActions.appendChild(breakBtn);
+  heroActions.appendChild(nextBtn);
+  hero.appendChild(heroActions);
+
+  header.appendChild(hero);
+
+  const exhaustedBannerEl = el("div", { id: "exhausted-banner", class: "exhausted-banner" + (m.agendaExhausted ? " visible" : "") },
+    "Agenda can't absorb any more time — upcoming sections are already down to their 1-minute floor.");
+  header.appendChild(exhaustedBannerEl);
+
+  cockpit.appendChild(header);
+
+  /* ---- body: agenda rail + notes centre ---- */
+  const body = el("div", { class: "cockpit-body" });
+
+  const rail = el("aside", { class: "cockpit-rail" });
+  const doneCount = m.sections.filter(s => s.status === "done").length;
+  rail.appendChild(el("div", { class: "rail-header" }, [
+    el("span", null, "Agenda"),
+    el("span", null, `${doneCount + 1} / ${m.sections.length}`),
   ]));
-
+  const railList = el("div", { id: "rail-list" });
   m.sections.forEach((s, idx) => {
     const isNextUp = s.status === "upcoming" && idx === m.currentIndex + 1;
     const item = el("div", { class: `agenda-item ${s.status}${isNextUp ? " next-up" : ""}`, "data-id": s.id });
@@ -801,27 +925,25 @@ function renderLive() {
     item.appendChild(el("div", { class: "agenda-status" }, statusIcon));
     const info = el("div", { class: "info" });
     info.appendChild(el("div", { class: "name" }, s.name));
-    const metaBits = [];
-    if (s.status === "done") {
-      metaBits.push(`Actual ${fmtMinutes(s.actualSeconds)} / planned ${fmtMinutes(s.originalPlannedSeconds)}`);
-    } else {
-      metaBits.push(`Planned ${fmtMinutes(s.plannedSeconds)}`);
-    }
-    const meta = el("div", { class: "meta" }, metaBits.join(" · "));
-    info.appendChild(meta);
+    const metaEl = el("div", { class: "meta" }, railMetaText(s));
+    info.appendChild(metaEl);
     item.appendChild(info);
-    if (isNextUp) item.appendChild(el("span", { class: "pill" }, "up next"));
-    if (s.wasExtended) item.appendChild(el("span", { class: "pill extended" }, "extended"));
-    if (s.wasShrunk) item.appendChild(el("span", { class: "pill shrunk" }, "shrunk"));
+    const badgesEl = el("div", { class: "badges" }, railBadges(s, isNextUp));
+    item.appendChild(badgesEl);
     if (s.status === "upcoming") {
       item.appendChild(el("div", { class: "drag-handle", title: "Drag to reorder" }, "⠿"));
     }
-    agendaCard.appendChild(item);
+    railList.appendChild(item);
+    if (s.status !== "done") {
+      liveRefs.railMeta.set(s.id, metaEl);
+      liveRefs.railBadges.set(s.id, badgesEl);
+    }
   });
-  app.appendChild(agendaCard);
+  rail.appendChild(railList);
+  body.appendChild(rail);
 
-  enableDragReorder(agendaCard, ".agenda-item.upcoming", (orderedIds) => {
-    const byId = new Map(m.sections.map(sec => [sec.id, sec]));
+  enableDragReorder(railList, ".agenda-item.upcoming", (orderedIds) => {
+    const byId = new Map(m.sections.map(sc => [sc.id, sc]));
     const firstUpcomingIdx = m.currentIndex + 1;
     const reordered = orderedIds.map(id => byId.get(id));
     m.sections.splice(firstUpcomingIdx, reordered.length, ...reordered);
@@ -829,71 +951,171 @@ function renderLive() {
     renderLive();
   });
 
+  const notes = el("main", { class: "cockpit-notes" });
+  notes.appendChild(el("div", { class: "notes-header" }, [
+    el("h2", null, sec.name),
+    el("div", { class: "notes-meta" }, `Planned ${fmtMinutes(sec.plannedSeconds)}`),
+  ]));
+
+  const notesActions = el("div", { class: "notes-actions" });
+  const btn1 = el("button", { class: "btn btn-small" }, "+1 min");
+  btn1.addEventListener("click", () => extendCurrentSection(1));
+  const btn5 = el("button", { class: "btn btn-small" }, "+5 min");
+  btn5.addEventListener("click", () => extendCurrentSection(5));
+  const customInput = el("input", { type: "number", min: "1", value: "2" });
+  const customBtn = el("button", { class: "btn btn-small" }, "Extend");
+  customBtn.addEventListener("click", () => {
+    const v = Math.max(1, parseInt(customInput.value, 10) || 1);
+    extendCurrentSection(v);
+  });
+  notesActions.appendChild(btn1);
+  notesActions.appendChild(btn5);
+  notesActions.appendChild(customInput);
+  notesActions.appendChild(customBtn);
+  notesActions.appendChild(el("div", { class: "spacer" }));
+  const endBtn = el("button", { class: "btn btn-danger" }, "End Meeting");
+  endBtn.addEventListener("click", () => {
+    showToast({
+      kind: "confirm",
+      message: "End the meeting now and go to notes & minutes?",
+      confirmLabel: "End Meeting",
+      onConfirm: endMeeting,
+    });
+  });
+  notesActions.appendChild(endBtn);
+  notes.appendChild(notesActions);
+
+  const notesArea = el("textarea", { placeholder: "Capture points, decisions, or follow-ups for this section..." });
+  notesArea.value = sec.notes;
+  notesArea.addEventListener("input", (e) => { sec.notes = e.target.value; save(); });
+  notes.appendChild(notesArea);
+
+  body.appendChild(notes);
+  cockpit.appendChild(body);
+
+  app.appendChild(cockpit);
+
   restoreFocus(focusInfo);
   startTick();
+}
+
+function railMetaText(s) {
+  if (s.status === "done") return `Actual ${fmtMinutes(s.actualSeconds)} / planned ${fmtMinutes(s.originalPlannedSeconds)}`;
+  return `Planned ${fmtMinutes(s.plannedSeconds)}`;
+}
+
+function railBadges(s, isNextUp) {
+  const badges = [];
+  if (isNextUp) badges.push(el("span", { class: "pill" }, "up next"));
+  if (s.wasExtended) badges.push(el("span", { class: "pill extended" }, "extended"));
+  if (s.wasShrunk) badges.push(el("span", { class: "pill shrunk" }, "shrunk"));
+  return badges;
+}
+
+// Refreshes every DOM node that can change from a pure tick — the current
+// item's countdown/progress, the header's projected-end and against-plan
+// numbers, and (only when a reclaim just happened) the rail's shrunk/
+// extended indicators. Deliberately never touches the notes textarea or
+// rebuilds the DOM: this is what used to be a full renderLive() every
+// second, which fought typing during an overrun. Runs whether the meeting
+// is running or paused, since projected end must keep drifting later in
+// real time even while the section clock is frozen.
+function updateLiveDisplays(reclaimHappened) {
+  if (!liveRefs) return;
+  const m = state.meeting;
+  const stats = computeLiveStats();
+  const { remaining, pct } = stats;
+  const isOvertime = remaining < 0;
+
+  const timeEl = document.getElementById("timer-display");
+  const fillEl = document.getElementById("progress-fill");
+  if (!timeEl) { clearTick(); return; }
+
+  timeEl.textContent = fmtClock(remaining);
+  timeEl.className = isOvertime ? "hero-value overtime" : (pct > 85 ? "hero-value warn" : "hero-value");
+  if (fillEl) {
+    fillEl.style.width = pct + "%";
+    fillEl.className = "progress-fill" + (isOvertime ? " overtime" : "");
+  }
+
+  const projectedEndEl = document.getElementById("projected-end");
+  if (projectedEndEl) projectedEndEl.textContent = fmtTimeOfDay(stats.projectedEndTs);
+
+  const badgeEl = document.getElementById("schedule-badge");
+  if (badgeEl) {
+    const badgeInfo = scheduleBadgeInfo();
+    badgeEl.textContent = badgeInfo.word;
+    badgeEl.className = `hero-value schedule-badge ${badgeInfo.cls}`;
+  }
+
+  const exhaustedBannerEl = document.getElementById("exhausted-banner");
+  if (exhaustedBannerEl) exhaustedBannerEl.classList.toggle("visible", !!m.agendaExhausted);
+
+  if (reclaimHappened) {
+    m.sections.forEach((s, idx) => {
+      if (s.status === "done") return;
+      const metaEl = liveRefs.railMeta.get(s.id);
+      if (metaEl) metaEl.textContent = railMetaText(s);
+      const badgesEl = liveRefs.railBadges.get(s.id);
+      if (badgesEl) {
+        const isNextUp = s.status === "upcoming" && idx === m.currentIndex + 1;
+        badgesEl.innerHTML = "";
+        for (const b of railBadges(s, isNextUp)) badgesEl.appendChild(b);
+      }
+    });
+  }
 }
 
 function startTick() {
   clearTick();
   tickHandle = setInterval(() => {
     const m = state.meeting;
-    if (!m || m.timerStatus !== "running") return;
+    if (!m) { clearTick(); return; }
     const sec = currentSection();
-    if (!sec) return;
+    if (!sec) { clearTick(); return; }
+
+    let reclaimHappened = false;
 
     // Running past the planned time auto-extends this section by pulling
     // the overage from upcoming sections, continuously, until "Next
-    // Section" locks in the actual time used.
-    const elapsed = elapsedSeconds(sec);
-    const overage = elapsed - sec.plannedSeconds;
-    const alreadyReclaimed = sec.autoReclaimed;
-    const toReclaim = overage - alreadyReclaimed;
-    if (toReclaim > 0.5) {
-      shrinkUpcomingSections(toReclaim);
-      sec.autoReclaimed = alreadyReclaimed + toReclaim;
-      sec.wasExtended = true;
-      save();
-      renderLive(); // full refresh so the shrinking agenda list is visible; focus-preserving
-      return;
+    // Section" locks in the actual time used. Only while actually running —
+    // elapsedSeconds() is frozen while paused, so there's no overage to
+    // chase then.
+    if (m.timerStatus === "running") {
+      const elapsed = elapsedSeconds(sec);
+      const overage = elapsed - sec.plannedSeconds;
+      const alreadyReclaimed = sec.autoReclaimed;
+      const toReclaim = overage - alreadyReclaimed;
+      if (toReclaim > 0.5) {
+        reclaimTime(toReclaim);
+        sec.autoReclaimed = alreadyReclaimed + toReclaim;
+        sec.wasExtended = true;
+        save();
+        reclaimHappened = true;
+      }
     }
 
-    const remaining = sec.plannedSeconds - elapsed;
-    const timeEl = document.getElementById("timer-display");
-    const fillEl = document.getElementById("progress-fill");
-    if (timeEl) {
-      timeEl.textContent = fmtClock(remaining);
-      const pct = Math.min(100, Math.max(0, (elapsed / sec.plannedSeconds) * 100));
-      timeEl.className = remaining < 0 ? "timer-display overtime" : (pct > 85 ? "timer-display warn" : "timer-display");
-      if (fillEl) {
-        fillEl.style.width = pct + "%";
-        fillEl.className = "progress-fill" + (remaining < 0 ? " overtime" : "");
-      }
-      const badgeEl = document.getElementById("schedule-badge");
-      if (badgeEl) {
-        const badgeInfo = scheduleBadgeInfo();
-        badgeEl.textContent = badgeInfo.text;
-        badgeEl.className = `schedule-badge ${badgeInfo.cls}`;
-      }
-    } else {
-      clearTick();
-    }
+    // Always refreshed — including while paused, since real time (and so
+    // the projected end) keeps moving even when the section clock doesn't.
+    updateLiveDisplays(reclaimHappened);
   }, 1000);
 }
 
-/* focus preservation across full re-renders (used sparingly on live view) */
+/* focus preservation across the rarer full re-renders (e.g. Next Section) */
 function captureFocus() {
   const active = document.activeElement;
-  if (active && active.tagName === "TEXTAREA" && active.parentElement && active.parentElement.querySelector("label")) {
-    return { isNotes: true, selStart: active.selectionStart, selEnd: active.selectionEnd };
+  if (active && active.tagName === "TEXTAREA" && active.closest(".cockpit-notes")) {
+    return { isNotes: true, selStart: active.selectionStart, selEnd: active.selectionEnd, scrollTop: active.scrollTop };
   }
   return null;
 }
 function restoreFocus(info) {
   if (!info || !info.isNotes) return;
-  const textarea = app.querySelector(".card textarea");
+  const textarea = app.querySelector(".cockpit-notes textarea");
   if (textarea) {
     textarea.focus();
     try { textarea.setSelectionRange(info.selStart, info.selEnd); } catch (e) {}
+    textarea.scrollTop = info.scrollTop;
   }
 }
 
@@ -930,6 +1152,10 @@ function renderMinutes() {
     el("td", null, el("strong", null, fmtMinutes(totalActual))),
   ]));
   summaryCard.appendChild(table);
+  if (m.breaks && m.breaks.length) {
+    const totalBreakSec = m.breaks.reduce((s, b) => s + ((b.endedAt || Date.now()) - b.startedAt) / 1000, 0);
+    summaryCard.appendChild(el("p", { style: "margin-top:8px;margin-bottom:0" }, `${m.breaks.length} break${m.breaks.length === 1 ? "" : "s"} taken (${fmtMinutes(totalBreakSec)} total).`));
+  }
   app.appendChild(summaryCard);
 
   // decisions
@@ -1034,9 +1260,9 @@ function renderMinutes() {
   app.appendChild(generalCard);
 
   const footer = el("div", { class: "footer-actions" });
-  const exportBtn = el("button", { class: "btn" }, "⬇ Export Markdown");
+  const exportBtn = el("button", { class: "btn" }, "Export Markdown");
   exportBtn.addEventListener("click", () => downloadMarkdown(m));
-  const saveBtn = el("button", { class: "btn btn-primary" }, "✓ Save & New Meeting");
+  const saveBtn = el("button", { class: "btn btn-primary" }, "Save & New Meeting");
   saveBtn.addEventListener("click", () => {
     state.history.unshift(JSON.parse(JSON.stringify(m)));
     state.meeting = null;
@@ -1077,11 +1303,18 @@ function renderHistory() {
     const delBtn = el("button", { class: "btn-icon btn-danger" }, "✕");
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (confirm("Delete this saved meeting?")) {
-        state.history.splice(idx, 1);
-        save();
-        renderHistory();
-      }
+      const [removed] = state.history.splice(idx, 1);
+      save();
+      renderHistory();
+      showToast({
+        kind: "undo",
+        message: `Deleted "${removed.title || "Untitled Meeting"}".`,
+        onUndo: () => {
+          state.history.splice(idx, 0, removed);
+          save();
+          renderHistory();
+        },
+      });
     });
     actions.appendChild(viewBtn);
     actions.appendChild(exportBtn);
