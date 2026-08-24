@@ -9,10 +9,14 @@
   --text: #201e1d;
   --text-dim: #7d7979;
   --text-mid: #605d5d;
-  --accent: #ec3013;
-  --accent-dark: #ae1800;
-  --accent-tint: #ffe0d9;
-  --accent-tint-2: #ffc4b8;
+  /* Interactive accent — buttons, links, focus, active states. Never used
+     for schedule status: --good/--bad below are reserved for that. */
+  --accent: #1552d6;
+  --accent-dark: #0f3aa3;
+  --accent-tint: #dde6fb;
+  --accent-tint-2: #c2d3f8;
+  /* Reserved for the "ahead of / behind schedule" indicator and other
+     planned-vs-actual time deltas — nowhere else in the app. */
   --good: #1e7a4c;
   --good-tint: #e1efe8;
   --bad: #ae1800;
@@ -323,8 +327,8 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
 }
 .btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
 
-.btn-danger { color: var(--bad); }
-.btn-danger:hover { border-color: var(--bad); background: var(--bad-tint); }
+.btn-danger { color: var(--text); font-weight: 700; }
+.btn-danger:hover { border-color: var(--line); background: var(--line); color: #fff; }
 
 .btn-black { background: var(--line); border-color: var(--line); color: #fff; }
 .btn-black:hover { background: #3a3735; border-color: #3a3735; }
@@ -424,7 +428,7 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
   color: var(--text-dim);
   text-align: center;
 }
-.agenda-item.done .agenda-status { color: var(--good); }
+.agenda-item.done .agenda-status { color: var(--text-dim); }
 .agenda-item.current .agenda-status { color: var(--accent); font-weight: 700; }
 
 .agenda-item .info { flex: 1; min-width: 0; }
@@ -492,9 +496,6 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
   background: var(--accent-tint);
   color: var(--accent-dark);
 }
-.pill.shrunk { background: var(--bad-tint); color: var(--bad); }
-.pill.extended { background: var(--warn-tint); color: var(--warn); }
-
 .list-input-row { display: flex; gap: 8px; margin-top: 8px; }
 .list-input-row input { flex: 1; }
 
@@ -720,7 +721,7 @@ table.minutes-table th {
 .hero-actions button:hover { background: var(--accent-tint); }
 .hero-actions button.primary { background: var(--accent); color: #fff; font-weight: 600; }
 .hero-actions button.primary:hover { background: var(--accent-dark); }
-.hero-actions button.danger:hover { background: var(--bad-tint); color: var(--bad); }
+.hero-actions button.danger:hover { background: var(--line); color: #fff; }
 
 .exhausted-banner {
   display: none;
@@ -851,7 +852,7 @@ table.minutes-table th {
   color: #fff;
 }
 .capture-item .capture-kind.action { background: var(--warn); }
-.capture-item .capture-kind.motion { background: var(--good); }
+.capture-item .capture-kind.motion { background: var(--line); }
 .capture-item .capture-text { font-size: 0.82rem; margin-top: 4px; line-height: 1.4; }
 .capture-item .capture-owner { font-family: "Archivo Narrow", sans-serif; font-size: 0.68rem; color: var(--accent-dark); margin-left: 4px; }
 .capture-item .capture-section { font-family: "Archivo Narrow", sans-serif; font-size: 0.6rem; color: var(--text-dim); margin-top: 2px; }
@@ -899,8 +900,8 @@ table.minutes-table th {
   font-size: 0.6rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: var(--good-tint);
-  color: var(--good);
+  background: var(--accent-tint);
+  color: var(--accent-dark);
   margin-left: 6px;
 }
 .standing-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-mid); margin-top: 8px; }
