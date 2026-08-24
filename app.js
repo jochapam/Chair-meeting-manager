@@ -627,7 +627,8 @@ function renderLive() {
   ]));
 
   m.sections.forEach((s, idx) => {
-    const item = el("div", { class: `agenda-item ${s.status}` });
+    const isNextUp = s.status === "upcoming" && idx === m.currentIndex + 1;
+    const item = el("div", { class: `agenda-item ${s.status}${isNextUp ? " next-up" : ""}` });
     const statusIcon = s.status === "done" ? "✓" : s.status === "current" ? "▶" : String(idx + 1);
     item.appendChild(el("div", { class: "agenda-status" }, statusIcon));
     const info = el("div", { class: "info" });
@@ -641,6 +642,7 @@ function renderLive() {
     const meta = el("div", { class: "meta" }, metaBits.join(" · "));
     info.appendChild(meta);
     item.appendChild(info);
+    if (isNextUp) item.appendChild(el("span", { class: "pill" }, "up next"));
     if (s.wasExtended) item.appendChild(el("span", { class: "pill extended" }, "extended"));
     if (s.wasShrunk) item.appendChild(el("span", { class: "pill shrunk" }, "shrunk"));
     agendaCard.appendChild(item);

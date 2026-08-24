@@ -183,6 +183,9 @@ button {
 .agenda-item.current .info .name { color: var(--accent); }
 .agenda-item .info .meta { font-size: 0.8rem; color: var(--text-dim); }
 
+.agenda-item.next-up .agenda-status { border-color: var(--accent); color: var(--accent); }
+.agenda-item.next-up .info .name { color: var(--accent); }
+
 .timer-card {
   text-align: center;
   padding: 28px 18px;
