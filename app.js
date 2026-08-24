@@ -793,6 +793,12 @@ function renderSetup() {
 
   const card = el("div", { class: "card" });
 
+  const cardHeader = el("div", { style: "display:flex;justify-content:flex-end;margin-bottom:8px" });
+  const newMeetingBtn = el("button", { class: "btn btn-small" }, "New Meeting");
+  newMeetingBtn.addEventListener("click", startNewMeetingDraft);
+  cardHeader.appendChild(newMeetingBtn);
+  card.appendChild(cardHeader);
+
   const titleInput = el("input", {
     type: "text", value: m.title, placeholder: "e.g. Q3 Steering Committee",
     oninput: (e) => { m.title = e.target.value; save(); },
@@ -932,19 +938,62 @@ function renderSetup() {
   app.appendChild(standingRow);
 }
 
-// Abandons the meeting currently in progress (live or paused) and returns
-// to a fresh Setup screen. Saved agendas and history are untouched — this
-// only discards the one in-flight meeting's notes/timing/captures.
+// Rewinds the current meeting back to its pre-start state and returns to
+// Setup so the agenda can be adjusted before starting again. The agenda
+// itself — title, attendees, section names and durations — is kept
+// exactly as-is; only this run's progress (timing, notes typed live,
+// captures, breaks, any live shrink/extend drift) is cleared. Not a
+// delete: it's "let me fix something and restart," not "throw this away."
+// For an actual blank slate, use the New Meeting button on Setup instead.
 function resetMeeting() {
-  showToast({
-    kind: "confirm",
-    message: "Reset this meeting and go back to Prepare? This discards its notes, timing, and captured items.",
-    confirmLabel: "Reset Meeting",
-    onConfirm: () => {
-      state.meeting = null;
-      switchView("setup");
-    },
-  });
+  const m = state.meeting;
+  if (!m) { switchView("setup"); return; }
+  m.currentIndex = -1;
+  m.timerStatus = "idle";
+  m.createdAt = null;
+  m.endedAt = null;
+  m.breaks = [];
+  m.agendaExhausted = false;
+  m.captures = [];
+  m.deferred = [];
+  m.decisions = [];
+  m.actionItems = [];
+  m.generalNotes = "";
+  for (const s of m.sections) {
+    s.status = "upcoming";
+    s.startedAt = null;
+    s.pausedAccum = 0;
+    s.actualSeconds = null;
+    s.notes = "";
+    s.wasExtended = false;
+    s.wasShrunk = false;
+    s.autoReclaimed = 0;
+    s.reallocation = null;
+    s.reallocationPaused = false;
+    s.reallocationDismissed = false;
+    s.plannedSeconds = s.originalPlannedSeconds;
+  }
+  save();
+  switchView("setup");
+  showToast({ message: "Back to Setup — your agenda is unchanged, ready to adjust and restart." });
+}
+
+// The explicit "start from blank" action — separate from Reset, which
+// keeps the current agenda. This is the only thing that clears title,
+// attendees, and sections back to nothing.
+function startNewMeetingDraft() {
+  const old = state.meeting;
+  const hadContent = old && (old.title || old.attendees || old.sections.length > 0);
+  state.meeting = newMeeting();
+  save();
+  renderSetup();
+  if (hadContent) {
+    showToast({
+      kind: "undo",
+      message: "Started a new meeting draft.",
+      onUndo: () => { state.meeting = old; save(); renderSetup(); },
+    });
+  }
 }
 
 function renderSectionRows(list) {
