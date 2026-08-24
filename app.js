@@ -68,7 +68,14 @@ function fmtDateTime(ts) {
 }
 
 function fmtTimeOfDay(ts) {
-  return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }).toLowerCase();
+}
+
+function fmtDateTimeLower(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const datePart = d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  return `${datePart}, ${fmtTimeOfDay(ts)}`;
 }
 
 /* ---------- agenda text import ---------- */
@@ -736,16 +743,16 @@ function switchView(view) {
 
 /* ---------- top nav (setup / minutes / history — live view has its own header) ---------- */
 
-// Three explicit tabs, used identically in the plain topbar (Setup/Minutes/
+// Four explicit tabs, used identically in the plain topbar (Setup/Minutes/
 // History) and the live cockpit header — Prepare is disabled while a
 // meeting is actually running/paused (there's only ever one meeting in
-// flight, so starting a fresh draft would blow away the live one), and
-// Live is disabled until there's something to show.
+// flight, so starting a fresh draft would blow away the live one); Live is
+// disabled until a meeting is actually running/paused; Minutes is disabled
+// until one has ended.
 function navButtons(activeKey) {
   const m = state.meeting;
   const meetingActive = m && (m.timerStatus === "running" || m.timerStatus === "paused");
   const meetingEnded = m && m.timerStatus === "ended";
-  const hasLiveContent = meetingActive || meetingEnded;
 
   const prepareBtn = el("button", { class: activeKey === "prepare" ? "active" : "" }, "Prepare");
   if (meetingActive) {
@@ -756,29 +763,47 @@ function navButtons(activeKey) {
   }
 
   const liveBtn = el("button", { class: activeKey === "live" ? "active" : "" }, "Live");
-  if (!hasLiveContent) {
+  if (!meetingActive) {
     liveBtn.disabled = true;
     liveBtn.title = "No meeting running yet — prepare one first";
   } else {
-    liveBtn.addEventListener("click", () => switchView(meetingEnded ? "minutes" : "live"));
+    liveBtn.addEventListener("click", () => switchView("live"));
+  }
+
+  const minutesBtn = el("button", { class: activeKey === "minutes" ? "active" : "" }, "Minutes");
+  if (!meetingEnded) {
+    minutesBtn.disabled = true;
+    minutesBtn.title = "Minutes appear once a meeting has ended";
+  } else {
+    minutesBtn.addEventListener("click", () => switchView("minutes"));
   }
 
   const historyBtn = el("button", { class: activeKey === "history" ? "active" : "" }, "History");
   historyBtn.addEventListener("click", () => switchView("history"));
 
-  return [prepareBtn, liveBtn, historyBtn];
+  return [prepareBtn, liveBtn, minutesBtn, historyBtn];
 }
 
 function renderTopbar(activeView) {
-  const activeKey = activeView === "setup" ? "prepare" : (activeView === "live" || activeView === "minutes") ? "live" : "history";
+  const activeKey = activeView === "setup" ? "prepare" : activeView === "live" ? "live" : activeView === "minutes" ? "minutes" : "history";
   const nav = el("div", { class: "nav-links" }, navButtons(activeKey));
+  const m = state.meeting;
+  const rightText = activeView === "setup" && m
+    ? `Baseline ${Math.round(m.sections.reduce((s, x) => s + x.plannedSeconds, 0) / 60)} min`
+    : (m ? (m.title || "Untitled Meeting") : "");
   return el("div", { class: "topbar" }, [
     el("h1", null, [el("span", { class: "brand-dot" }), "Chair's Meeting Manager"]),
     nav,
+    el("div", { class: "spacer" }),
+    el("div", { class: "topbar-right" }, rightText),
   ]);
 }
 
 /* ---------- SETUP VIEW ---------- */
+
+function agendaTotalMinutes(sections) {
+  return Math.round(sections.reduce((s, x) => s + x.plannedSeconds, 0) / 60);
+}
 
 function renderSetup() {
   clearTick();
@@ -791,104 +816,76 @@ function renderSetup() {
   app.innerHTML = "";
   app.appendChild(renderTopbar("setup"));
 
-  const card = el("div", { class: "card" });
+  const layout = el("div", { class: "two-col" });
+  const main = el("div", null);
+  const sidebar = el("div", null);
 
-  const cardHeader = el("div", { style: "display:flex;justify-content:flex-end;margin-bottom:8px" });
+  const headRow = el("div", { class: "row", style: "justify-content:space-between;align-items:flex-start" });
+  headRow.appendChild(el("h1", { class: "page-head" }, "Prepare the meeting"));
   const newMeetingBtn = el("button", { class: "btn btn-small" }, "New Meeting");
   newMeetingBtn.addEventListener("click", startNewMeetingDraft);
-  cardHeader.appendChild(newMeetingBtn);
-  card.appendChild(cardHeader);
+  headRow.appendChild(newMeetingBtn);
+  main.appendChild(headRow);
+  main.appendChild(el("p", { class: "page-sub" }, "Durations set the baseline the whole meeting is measured against. Where you've run this item before, the suggestion is what actually happened."));
+  main.appendChild(el("hr", { class: "page-hr" }));
 
+  const titleField = el("div", { class: "field" });
+  titleField.appendChild(el("label", { class: "field-label" }, "Title"));
   const titleInput = el("input", {
-    type: "text", value: m.title, placeholder: "e.g. Q3 Steering Committee",
+    class: "underline-input", type: "text", value: m.title, placeholder: "e.g. Q3 Steering Committee",
     oninput: (e) => { m.title = e.target.value; save(); },
   });
-  card.appendChild(el("label", null, "Meeting title"));
-  card.appendChild(titleInput);
+  titleField.appendChild(titleInput);
+  main.appendChild(titleField);
 
+  const attendeesField = el("div", { class: "field" });
+  attendeesField.appendChild(el("label", { class: "field-label" }, "Attendees"));
   const attendeesInput = el("input", {
-    type: "text", value: m.attendees, placeholder: "e.g. Alice, Bob, Chandra (optional)",
+    class: "underline-input", type: "text", value: m.attendees, placeholder: "Optional — names, comma separated",
     oninput: (e) => { m.attendees = e.target.value; save(); },
   });
-  card.appendChild(el("label", null, "Attendees"));
-  card.appendChild(attendeesInput);
+  attendeesField.appendChild(attendeesInput);
+  main.appendChild(attendeesField);
 
-  app.appendChild(card);
-
-  const standing = state.savedAgendas.find(a => a.isStanding);
-  if (standing) {
-    const standingCard = el("div", { class: "card" });
-    standingCard.appendChild(el("h3", null, [`Standing Agenda`, el("span", { class: "standing-badge" }, "series")]));
-    const totalMin = Math.round(standing.sections.reduce((s, x) => s + x.plannedSeconds, 0) / 60);
-    standingCard.appendChild(el("p", null, `"${standing.title || "Untitled Meeting"}" — ${standing.sections.length} sections, ${totalMin} min. Start here and just edit the exceptions.`));
-    const useBtn = el("button", { class: "btn btn-primary" }, "Start From Standing Agenda");
-    useBtn.addEventListener("click", () => loadSavedAgenda(standing.id));
-    standingCard.appendChild(useBtn);
-    app.appendChild(standingCard);
-  }
-
-  if (state.savedAgendas.length > 0) {
-    const savedCard = el("div", { class: "card" });
-    savedCard.appendChild(el("h3", null, "Saved Agendas"));
-    savedCard.appendChild(el("p", null, "Drafts you prepped ahead of time. Load one to start editing or run the meeting."));
-    state.savedAgendas.forEach(a => {
-      const totalMin = Math.round(a.sections.reduce((s, x) => s + x.plannedSeconds, 0) / 60);
-      const item = el("div", { class: "history-item" });
-      const left = el("div", null, [
-        el("div", { class: "name" }, [a.title || "Untitled Meeting", a.isStanding ? el("span", { class: "standing-badge" }, "standing") : null]),
-        el("div", { class: "date" }, `${a.sections.length} section${a.sections.length === 1 ? "" : "s"} · ${totalMin} min · saved ${fmtDateTime(a.savedAt)}`),
-      ]);
-      const actions = el("div", { class: "row" });
-      const loadBtn = el("button", { class: "btn btn-small" }, "Load");
-      loadBtn.addEventListener("click", () => loadSavedAgenda(a.id));
-      const delBtn = el("button", { class: "btn-icon btn-danger" }, "✕");
-      delBtn.addEventListener("click", () => deleteSavedAgenda(a.id));
-      actions.appendChild(loadBtn);
-      actions.appendChild(delBtn);
-      item.appendChild(left);
-      item.appendChild(actions);
-      savedCard.appendChild(item);
-    });
-    app.appendChild(savedCard);
-  }
-
-  const agendaCard = el("div", { class: "card" });
-  agendaCard.appendChild(el("h3", null, "Agenda"));
-  agendaCard.appendChild(el("p", null, "Add sections with a planned duration. You can extend any section live — remaining upcoming sections will automatically shrink to try to keep the meeting on schedule."));
+  main.appendChild(el("div", { class: "section-label-row" }, [
+    el("span", { class: "section-label" }, "Agenda"),
+    el("span", { class: "rule" }),
+    el("span", { class: "value", id: "agenda-total" }, `${agendaTotalMinutes(m.sections)} min`),
+  ]));
 
   const list = el("div", { id: "section-list" });
   renderSectionRows(list);
-  agendaCard.appendChild(list);
+  main.appendChild(list);
 
-  const addRow = el("div", { class: "row", style: "margin-top:10px" });
-  const nameField = el("input", { type: "text", placeholder: "New section name" });
-  nameField.style.flex = "1";
-  const durField = el("input", { type: "number", min: "1", value: "5", class: "dur-input" });
-  const addBtn = el("button", { class: "btn btn-primary" }, "+ Add");
+  const addRow = el("div", { class: "row", style: "margin-top:10px;gap:12px" });
+  const nameField = el("input", { class: "underline-input", type: "text", placeholder: "New agenda item", style: "flex:1" });
+  const durField = el("input", { class: "underline-input dur-input", type: "number", min: "1", value: "10", style: "width:64px;text-align:right" });
+  const addBtn = el("button", { class: "btn btn-black" }, "Add");
   addBtn.addEventListener("click", () => {
-    const name = nameField.value.trim() || "Untitled section";
-    const dur = Math.max(1, parseInt(durField.value, 10) || 5);
+    const name = nameField.value.trim() || "Untitled item";
+    const dur = Math.max(1, parseInt(durField.value, 10) || 10);
     m.sections.push(newSection(name, dur));
     save();
     renderSectionRows(list);
+    updateAgendaTotal();
     nameField.value = "";
-    durField.value = "5";
+    durField.value = "10";
     nameField.focus();
   });
   nameField.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
   addRow.appendChild(nameField);
   addRow.appendChild(durField);
+  addRow.appendChild(el("span", { class: "min-label" }, "min"));
   addRow.appendChild(addBtn);
-  agendaCard.appendChild(addRow);
+  main.appendChild(addRow);
 
-  const importDetails = el("details", { style: "margin-top:14px" });
-  importDetails.appendChild(el("summary", { style: "cursor:pointer;font-size:0.85rem;color:var(--text-dim)" }, "Or paste an agenda to import"));
-  const importBody = el("div", { style: "margin-top:8px" });
-  importBody.appendChild(el("p", { style: "font-size:0.8rem;margin-bottom:6px" },
-    'One item per line, ending in a duration, e.g. "1.2 In camera session  10mins". Lines without a duration (section headers, document references) are skipped.'));
-  const importArea = el("textarea", { placeholder: "Paste agenda text here...", style: "min-height:100px" });
-  const importRow = el("div", { class: "row", style: "margin-top:8px" });
-  const importBtn = el("button", { class: "btn btn-small" }, "Parse & Add Sections");
+  const pasteBox = el("div", { class: "paste-box" });
+  pasteBox.appendChild(el("div", { class: "paste-head" }, "Paste an agenda"));
+  const importArea = el("textarea", { placeholder: "1.2 In camera session   10 mins\n1.3 Related party transactions   15 mins" });
+  pasteBox.appendChild(importArea);
+  const pasteFoot = el("div", { class: "paste-foot" });
+  pasteFoot.appendChild(el("p", null, "Lines ending in a duration become items. Headers and untimed references are skipped."));
+  const importBtn = el("button", { class: "btn" }, "Parse and Add");
   const importStatus = el("span", { style: "font-size:0.8rem;color:var(--text-dim)" });
   importBtn.addEventListener("click", () => {
     const found = parseAgendaText(importArea.value);
@@ -901,41 +898,75 @@ function renderSetup() {
     save();
     renderSetup();
   });
-  importRow.appendChild(importBtn);
-  importRow.appendChild(importStatus);
-  importBody.appendChild(importArea);
-  importBody.appendChild(importRow);
-  importDetails.appendChild(importBody);
-  agendaCard.appendChild(importDetails);
+  pasteFoot.appendChild(importStatus);
+  pasteFoot.appendChild(importBtn);
+  pasteBox.appendChild(pasteFoot);
+  main.appendChild(pasteBox);
 
-  const totalMin = Math.round(m.sections.reduce((s, x) => s + x.plannedSeconds, 0) / 60);
-  agendaCard.appendChild(el("div", { class: "meeting-meta", style: "margin-top:12px" }, [
-    el("span", null, `${m.sections.length} section${m.sections.length === 1 ? "" : "s"}`),
-    el("span", null, `Total planned: ${totalMin} min`),
-  ]));
+  function updateAgendaTotal() {
+    const totalEl = document.getElementById("agenda-total");
+    if (totalEl) totalEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
+    const baselineEl = document.getElementById("sidebar-baseline");
+    if (baselineEl) baselineEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
+    const countEl = document.getElementById("sidebar-count");
+    if (countEl) countEl.textContent = `${m.sections.length} item${m.sections.length === 1 ? "" : "s"} on the agenda`;
+    const topbarRight = document.querySelector(".topbar-right");
+    if (topbarRight) topbarRight.textContent = `Baseline ${agendaTotalMinutes(m.sections)} min`;
+  }
 
-  app.appendChild(agendaCard);
+  // --- sidebar ---
+  const standing = state.savedAgendas.find(a => a.isStanding);
+  const savedCard = el("div", { class: "side-card" });
+  savedCard.appendChild(el("div", { class: "side-head" }, "Standing & Saved"));
+  if (state.savedAgendas.length === 0) {
+    savedCard.appendChild(el("div", { class: "side-note" }, "Save this agenda to reuse it. Mark one as standing and every new meeting starts from it."));
+  } else {
+    state.savedAgendas.forEach(a => {
+      const row = el("div", { style: "padding:8px 0;border-bottom:1px solid var(--line-soft)" });
+      const nameLine = el("div", { style: "display:flex;justify-content:space-between;align-items:baseline;gap:8px" }, [
+        el("span", { style: "font-weight:600;font-size:0.88rem" }, a.title || "Untitled Meeting"),
+        a.isStanding ? el("span", { class: "standing-badge" }, "standing") : null,
+      ]);
+      row.appendChild(nameLine);
+      row.appendChild(el("div", { class: "side-note", style: "margin:2px 0 6px" }, `${a.sections.length} item${a.sections.length === 1 ? "" : "s"} · ${agendaTotalMinutes(a.sections)} min`));
+      const actions = el("div", { class: "row" });
+      const loadBtn = el("button", { class: "btn btn-small" }, "Load");
+      loadBtn.addEventListener("click", () => loadSavedAgenda(a.id));
+      const delBtn = el("button", { class: "btn-icon btn-danger" }, "✕");
+      delBtn.addEventListener("click", () => deleteSavedAgenda(a.id));
+      actions.appendChild(loadBtn);
+      actions.appendChild(delBtn);
+      row.appendChild(actions);
+      savedCard.appendChild(row);
+    });
+  }
+  sidebar.appendChild(savedCard);
 
-  const actionRow = el("div", { class: "row" });
-  const saveForLaterBtn = el("button", { class: "btn", style: "padding:12px" }, "Save for Later");
-  saveForLaterBtn.addEventListener("click", () => saveAgendaForLater(false));
-  const startBtn = el("button", { class: "btn btn-primary", style: "flex:1;padding:12px;font-size:1rem" }, "Start Meeting");
+  const baselineCard = el("div", { class: "side-card" });
+  baselineCard.appendChild(el("div", { class: "side-head" }, "Baseline"));
+  baselineCard.appendChild(el("div", { class: "side-big", id: "sidebar-baseline" }, `${agendaTotalMinutes(m.sections)} min`));
+  baselineCard.appendChild(el("div", { class: "side-note", id: "sidebar-count" }, `${m.sections.length} item${m.sections.length === 1 ? "" : "s"} on the agenda`));
+  const startBtn = el("button", { class: "btn btn-primary" }, "Start Meeting");
   startBtn.addEventListener("click", () => {
     if (m.sections.length === 0) {
-      showToast({ message: "Add at least one agenda section first.", kind: "warning" });
+      showToast({ message: "Add at least one agenda item first.", kind: "warning" });
       return;
     }
     startMeeting();
   });
-  actionRow.appendChild(saveForLaterBtn);
-  actionRow.appendChild(startBtn);
-  app.appendChild(actionRow);
+  baselineCard.appendChild(startBtn);
+  const saveBtn = el("button", { class: "btn" }, "Save Agenda");
+  saveBtn.addEventListener("click", () => saveAgendaForLater(false));
+  baselineCard.appendChild(saveBtn);
+  const standingLink = el("button", { class: "reset-link", style: "margin-top:10px" },
+    standing && standing.title === m.title ? "Update standing agenda" : "Save as standing agenda for a series");
+  standingLink.addEventListener("click", () => saveAgendaForLater(true));
+  baselineCard.appendChild(standingLink);
+  sidebar.appendChild(baselineCard);
 
-  const standingRow = el("div", { class: "standing-toggle" });
-  const standingBtn = el("button", { class: "btn btn-small" }, standing && standing.title === m.title ? "Update Standing Agenda" : "Save as Standing Agenda for a Series");
-  standingBtn.addEventListener("click", () => saveAgendaForLater(true));
-  standingRow.appendChild(standingBtn);
-  app.appendChild(standingRow);
+  layout.appendChild(main);
+  layout.appendChild(sidebar);
+  app.appendChild(layout);
 }
 
 // Rewinds the current meeting back to its pre-start state and returns to
@@ -996,19 +1027,31 @@ function startNewMeetingDraft() {
   }
 }
 
+function refreshAgendaTotals() {
+  const m = state.meeting;
+  const totalEl = document.getElementById("agenda-total");
+  if (totalEl) totalEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
+  const baselineEl = document.getElementById("sidebar-baseline");
+  if (baselineEl) baselineEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
+  const topbarRight = document.querySelector(".topbar-right");
+  if (topbarRight) topbarRight.textContent = `Baseline ${agendaTotalMinutes(m.sections)} min`;
+}
+
 function renderSectionRows(list) {
   const m = state.meeting;
   list.innerHTML = "";
   if (m.sections.length === 0) {
-    list.appendChild(el("p", { style: "margin:4px 0" }, "No sections yet — add one below or paste an agenda."));
+    list.appendChild(el("p", { style: "margin:4px 0" }, "Nothing on the agenda yet — add an item below, paste one in, or load a standing agenda."));
   }
-  m.sections.forEach((s) => {
+  m.sections.forEach((s, idx) => {
     const row = el("div", { class: "section-row", "data-id": s.id });
+
+    row.appendChild(el("div", { class: "item-num" }, String(idx + 1)));
 
     const handle = el("div", { class: "drag-handle", title: "Drag to reorder" }, "⠿");
 
     const nameCol = el("div", { style: "flex:1;min-width:0" });
-    const nameInput = el("input", { type: "text", class: "name-input", value: s.name });
+    const nameInput = el("input", { type: "text", class: "name-input underline-input", value: s.name, style: "font-size:1rem;padding:4px 2px" });
     nameInput.addEventListener("input", (e) => { s.name = e.target.value; save(); });
     nameCol.appendChild(nameInput);
     const suggestion = durationSuggestion(s.name);
@@ -1025,12 +1068,13 @@ function renderSectionRows(list) {
       nameCol.appendChild(suggEl);
     }
 
-    const durInput = el("input", { type: "number", min: "1", class: "dur-input", value: String(Math.round(s.plannedSeconds / 60)) });
+    const durInput = el("input", { type: "number", min: "1", class: "dur-input underline-input", value: String(Math.round(s.plannedSeconds / 60)) });
     durInput.addEventListener("input", (e) => {
       const v = Math.max(1, parseInt(e.target.value, 10) || 1);
       s.plannedSeconds = v * 60;
       s.originalPlannedSeconds = v * 60;
       save();
+      refreshAgendaTotals();
     });
 
     const delBtn = el("button", { class: "btn-icon btn-danger", title: "Remove" }, "✕");
@@ -1051,10 +1095,10 @@ function renderSectionRows(list) {
       });
     });
 
-    row.appendChild(handle);
     row.appendChild(nameCol);
     row.appendChild(durInput);
-    row.appendChild(el("span", { class: "row" }, [el("span", { style: "color:var(--text-dim);font-size:0.8rem" }, "min")]));
+    row.appendChild(el("span", { class: "min-label" }, "min"));
+    row.appendChild(handle);
     row.appendChild(delBtn);
     list.appendChild(row);
   });
@@ -1149,7 +1193,7 @@ function renderLive() {
   pauseBtn.addEventListener("click", togglePause);
   const breakBtn = el("button", null, "Break");
   breakBtn.addEventListener("click", takeBreak);
-  const nextBtn = el("button", { class: "primary" }, m.currentIndex === m.sections.length - 1 ? "Finish Meeting" : "Next Section");
+  const nextBtn = el("button", { class: "primary" }, m.currentIndex === m.sections.length - 1 ? "Finish Meeting" : "Next Item");
   nextBtn.addEventListener("click", goToNextSection);
   heroActions.appendChild(pauseBtn);
   heroActions.appendChild(breakBtn);
@@ -1257,7 +1301,7 @@ function renderLive() {
   const notes = el("main", { class: "cockpit-notes" });
   notes.appendChild(el("div", { class: "notes-header" }, [
     el("h2", null, sec.name),
-    el("div", { class: "notes-meta" }, `Planned ${fmtMinutes(sec.plannedSeconds)}`),
+    el("div", { class: "notes-meta" }, `Budget ${fmtMinutes(sec.plannedSeconds)}`),
   ]));
 
   const notesActions = el("div", { class: "notes-actions" });
@@ -1542,7 +1586,7 @@ function startTick() {
   }, 1000);
 }
 
-/* focus preservation across the rarer full re-renders (e.g. Next Section) */
+/* focus preservation across the rarer full re-renders (e.g. Next Item) */
 function captureFocus() {
   const active = document.activeElement;
   if (active && active.tagName === "TEXTAREA" && active.closest(".cockpit-notes")) {
@@ -1619,6 +1663,15 @@ document.addEventListener("keydown", (e) => {
 
 /* ---------- MINUTES VIEW ---------- */
 
+function flatSectionLabel(text, value) {
+  const row = el("div", { class: "section-label-row" }, [
+    el("span", { class: "section-label" }, text),
+    el("span", { class: "rule" }),
+  ]);
+  if (value != null) row.appendChild(el("span", { class: "value" }, value));
+  return row;
+}
+
 function renderMinutes() {
   clearTick();
   const m = state.meeting;
@@ -1627,171 +1680,146 @@ function renderMinutes() {
   app.innerHTML = "";
   app.appendChild(renderTopbar("minutes"));
 
-  app.appendChild(el("h2", null, m.title || "Untitled Meeting"));
-  app.appendChild(el("p", null, `${fmtDateTime(m.createdAt)}${m.attendees ? " · " + m.attendees : ""}`));
+  const headRow = el("div", { class: "row", style: "justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px" });
+  const headMain = el("div", null);
+  headMain.appendChild(el("div", { class: "page-eyebrow" }, "Minutes"));
+  headMain.appendChild(el("h1", { class: "page-head" }, m.title || "Untitled meeting"));
+  headMain.appendChild(el("p", { class: "page-sub", style: "margin:0" }, fmtDateTimeLower(m.createdAt) + (m.attendees ? " · " + m.attendees : "")));
+  headRow.appendChild(headMain);
 
-  const summaryCard = el("div", { class: "card" });
-  const totalPlanned = m.sections.reduce((s, x) => s + x.originalPlannedSeconds, 0);
-  const totalActual = m.sections.reduce((s, x) => s + (x.actualSeconds ?? x.plannedSeconds), 0);
-  summaryCard.appendChild(el("h3", null, "Timing Summary"));
-  const table = el("table", { class: "minutes-table" });
-  const thead = el("tr", null, [el("th", null, "Section"), el("th", null, "Planned"), el("th", null, "Actual")]);
-  table.appendChild(thead);
-  m.sections.forEach(s => {
-    table.appendChild(el("tr", null, [
-      el("td", null, s.name),
-      el("td", null, fmtMinutes(s.originalPlannedSeconds)),
-      el("td", null, s.actualSeconds != null ? fmtMinutes(s.actualSeconds) : "—"),
-    ]));
-  });
-  table.appendChild(el("tr", null, [
-    el("td", null, el("strong", null, "Total")),
-    el("td", null, el("strong", null, fmtMinutes(totalPlanned))),
-    el("td", null, el("strong", null, fmtMinutes(totalActual))),
-  ]));
-  summaryCard.appendChild(table);
-  if (m.breaks && m.breaks.length) {
-    const totalBreakSec = m.breaks.reduce((s, b) => s + ((b.endedAt || Date.now()) - b.startedAt) / 1000, 0);
-    summaryCard.appendChild(el("p", { style: "margin-top:8px;margin-bottom:0" }, `${m.breaks.length} break${m.breaks.length === 1 ? "" : "s"} taken (${fmtMinutes(totalBreakSec)} total).`));
-  }
-  app.appendChild(summaryCard);
-
-  if (m.deferred && m.deferred.length) {
-    const deferredCard = el("div", { class: "card" });
-    deferredCard.appendChild(el("h3", null, "Deferred to Next Meeting"));
-    m.deferred.forEach(d => deferredCard.appendChild(el("p", { style: "margin:2px 0" }, `${d.name} (${fmtMinutes(d.originalPlannedSeconds)})`)));
-    app.appendChild(deferredCard);
-  }
-
-  // decisions
-  const decisionsCard = el("div", { class: "card" });
-  decisionsCard.appendChild(el("h3", null, "Decisions"));
-  const decisionsList = el("div", { class: "chip-list" });
-  decisionsCard.appendChild(decisionsList);
-  const decisionInputRow = el("div", { class: "list-input-row" });
-  const decisionInput = el("input", { type: "text", placeholder: "Add a decision..." });
-  const decisionAddBtn = el("button", { class: "btn btn-small" }, "Add");
-  const addDecision = () => {
-    const v = decisionInput.value.trim();
-    if (!v) return;
-    m.decisions.push(v);
-    save();
-    decisionInput.value = "";
-    renderDecisions();
-  };
-  decisionAddBtn.addEventListener("click", addDecision);
-  decisionInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addDecision(); });
-  decisionInputRow.appendChild(decisionInput);
-  decisionInputRow.appendChild(decisionAddBtn);
-  decisionsCard.appendChild(decisionInputRow);
-  app.appendChild(decisionsCard);
-
-  function renderDecisions() {
-    decisionsList.innerHTML = "";
-    m.decisions.forEach((d, i) => {
-      const chip = el("div", { class: "chip" }, [
-        el("span", { class: "txt" }, d),
-      ]);
-      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
-      rm.addEventListener("click", () => { m.decisions.splice(i, 1); save(); renderDecisions(); });
-      chip.appendChild(rm);
-      decisionsList.appendChild(chip);
-    });
-  }
-  renderDecisions();
-
-  // action items
-  const actionCard = el("div", { class: "card" });
-  actionCard.appendChild(el("h3", null, "Action Items"));
-  const actionList = el("div", { class: "chip-list" });
-  actionCard.appendChild(actionList);
-  const actionInputRow = el("div", { class: "list-input-row" });
-  const actionText = el("input", { type: "text", placeholder: "Action item..." });
-  const actionOwner = el("input", { type: "text", placeholder: "Owner (optional)", style: "max-width:140px" });
-  const actionAddBtn = el("button", { class: "btn btn-small" }, "Add");
-  const addAction = () => {
-    const v = actionText.value.trim();
-    if (!v) return;
-    m.actionItems.push({ text: v, owner: actionOwner.value.trim() });
-    save();
-    actionText.value = "";
-    actionOwner.value = "";
-    renderActions();
-  };
-  actionAddBtn.addEventListener("click", addAction);
-  actionText.addEventListener("keydown", (e) => { if (e.key === "Enter") addAction(); });
-  actionInputRow.appendChild(actionText);
-  actionInputRow.appendChild(actionOwner);
-  actionInputRow.appendChild(actionAddBtn);
-  actionCard.appendChild(actionInputRow);
-  app.appendChild(actionCard);
-
-  function renderActions() {
-    actionList.innerHTML = "";
-    m.actionItems.forEach((a, i) => {
-      const chip = el("div", { class: "chip" }, [
-        el("span", { class: "txt" }, a.text),
-        a.owner ? el("span", { class: "owner" }, a.owner) : null,
-      ]);
-      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
-      rm.addEventListener("click", () => { m.actionItems.splice(i, 1); save(); renderActions(); });
-      chip.appendChild(rm);
-      actionList.appendChild(chip);
-    });
-  }
-  renderActions();
-
-  // motions (filed via /motion, kept as free text)
-  const motions = (m.captures || []).filter(c => c.kind === "motion");
-  if (motions.length) {
-    const motionsCard = el("div", { class: "card" });
-    motionsCard.appendChild(el("h3", null, "Motions"));
-    const motionsList = el("div", { class: "chip-list" });
-    motions.forEach(mo => motionsList.appendChild(el("div", { class: "chip" }, [el("span", { class: "txt" }, mo.text)])));
-    motionsCard.appendChild(motionsList);
-    app.appendChild(motionsCard);
-  }
-
-  // section notes review
-  const sectionNotesCard = el("div", { class: "card" });
-  sectionNotesCard.appendChild(el("h3", null, "Section Notes"));
-  m.sections.forEach(s => {
-    const block = el("div", { class: "section-notes-block" });
-    block.appendChild(el("h4", null, s.name));
-    const ta = el("textarea", null, s.notes);
-    ta.value = s.notes;
-    ta.addEventListener("input", (e) => { s.notes = e.target.value; save(); });
-    block.appendChild(ta);
-    sectionNotesCard.appendChild(block);
-  });
-  app.appendChild(sectionNotesCard);
-
-  // general notes
-  const generalCard = el("div", { class: "card" });
-  generalCard.appendChild(el("label", null, "General Notes"));
-  const generalArea = el("textarea", { placeholder: "Overall meeting notes, context, next steps..." }, m.generalNotes);
-  generalArea.value = m.generalNotes;
-  generalArea.addEventListener("input", (e) => { m.generalNotes = e.target.value; save(); });
-  generalCard.appendChild(generalArea);
-  app.appendChild(generalCard);
-
-  const footer = el("div", { class: "footer-actions" });
-  const copyBtn = el("button", { class: "btn" }, "Copy for Email");
+  const headActions = el("div", { class: "row" });
+  const copyBtn = el("button", { class: "btn" }, "Copy");
   copyBtn.addEventListener("click", () => copyMinutesToClipboard(m));
-  const exportBtn = el("button", { class: "btn" }, "Export Markdown");
+  const exportBtn = el("button", { class: "btn" }, "Markdown");
   exportBtn.addEventListener("click", () => downloadMarkdown(m));
-  const saveBtn = el("button", { class: "btn btn-primary" }, "Save & New Meeting");
-  saveBtn.addEventListener("click", () => {
+  const printBtn = el("button", { class: "btn" }, "Print");
+  printBtn.addEventListener("click", () => window.print());
+  const fileBtn = el("button", { class: "btn btn-primary" }, "File Meeting");
+  fileBtn.addEventListener("click", () => {
     state.history.unshift(JSON.parse(JSON.stringify(m)));
     state.meeting = null;
     state.view = "setup";
     save();
     render();
   });
-  footer.appendChild(copyBtn);
-  footer.appendChild(exportBtn);
-  footer.appendChild(saveBtn);
-  app.appendChild(footer);
+  headActions.appendChild(copyBtn);
+  headActions.appendChild(exportBtn);
+  headActions.appendChild(printBtn);
+  headActions.appendChild(fileBtn);
+  headRow.appendChild(headActions);
+  app.appendChild(headRow);
+  app.appendChild(el("hr", { class: "page-hr" }));
+
+  // --- stats row ---
+  const doneSections = m.sections.filter(s => s.status === "done" || s.actualSeconds != null);
+  const plannedSoFar = doneSections.reduce((s, x) => s + x.originalPlannedSeconds, 0);
+  const elapsed = doneSections.reduce((s, x) => s + x.actualSeconds, 0);
+  const variance = elapsed - plannedSoFar;
+  const baseline = m.sections.reduce((s, x) => s + x.originalPlannedSeconds, 0);
+  const statRow = el("div", { class: "stat-row" });
+  statRow.appendChild(el("div", { class: "stat-block" }, [el("div", { class: "stat-label" }, "Planned so far"), el("div", { class: "stat-value" }, fmtMinutes(plannedSoFar))]));
+  statRow.appendChild(el("div", { class: "stat-block" }, [el("div", { class: "stat-label" }, "Elapsed"), el("div", { class: "stat-value" }, fmtMinutes(elapsed))]));
+  const varianceText = (variance >= 0 ? "+" : "−") + fmtMinutes(Math.abs(variance));
+  statRow.appendChild(el("div", { class: "stat-block" }, [el("div", { class: "stat-label" }, "Variance"), el("div", { class: `stat-value ${variance > 0 ? "behind" : variance < 0 ? "ahead" : ""}` }, varianceText)]));
+  statRow.appendChild(el("div", { class: "stat-block" }, [el("div", { class: "stat-label" }, "Baseline"), el("div", { class: "stat-value" }, fmtMinutes(baseline))]));
+  app.appendChild(statRow);
+  app.appendChild(el("hr", { class: "page-hr" }));
+
+  // --- timing ---
+  app.appendChild(flatSectionLabel("Timing"));
+  m.sections.forEach(s => {
+    const row = el("div", { class: "flat-row" });
+    row.appendChild(el("div", { class: "name" }, s.name));
+    row.appendChild(el("div", { class: "stat dim" }, fmtMinutes(s.originalPlannedSeconds)));
+    if (s.actualSeconds != null) {
+      row.appendChild(el("div", { class: "stat" }, fmtMinutes(s.actualSeconds)));
+      const delta = s.actualSeconds - s.originalPlannedSeconds;
+      const deltaText = Math.abs(Math.round(delta / 60)) < 1 ? "0m" : (delta >= 0 ? "+" : "−") + Math.round(Math.abs(delta) / 60) + "m";
+      row.appendChild(el("div", { class: `stat delta ${delta < 0 ? "under" : delta > 0 ? "over" : ""}` }, deltaText));
+    } else {
+      row.appendChild(el("div", { class: "stat dim" }, "—"));
+      row.appendChild(el("div", { class: "stat" }, ""));
+    }
+    app.appendChild(row);
+  });
+
+  // --- deferred ---
+  if (m.deferred && m.deferred.length) {
+    app.appendChild(flatSectionLabel("Deferred to Next Meeting"));
+    m.deferred.forEach(d => {
+      const row = el("div", { class: "flat-row" });
+      row.appendChild(el("div", { class: "name" }, d.name));
+      row.appendChild(el("div", { class: "stat dim" }, fmtMinutes(d.originalPlannedSeconds)));
+      app.appendChild(row);
+    });
+  }
+
+  // --- decisions ---
+  if (m.decisions.length) {
+    app.appendChild(flatSectionLabel("Decisions"));
+    m.decisions.forEach((d, i) => {
+      const row = el("div", { class: "flat-row" });
+      row.appendChild(el("div", { class: "name" }, d));
+      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
+      rm.addEventListener("click", () => { m.decisions.splice(i, 1); save(); renderMinutes(); });
+      row.appendChild(rm);
+      app.appendChild(row);
+    });
+  }
+
+  // --- action items ---
+  if (m.actionItems.length) {
+    app.appendChild(flatSectionLabel("Action Items"));
+    m.actionItems.forEach((a, i) => {
+      const row = el("div", { class: "flat-row" });
+      row.appendChild(el("div", { class: "name" }, [a.text, a.owner ? el("span", { class: "stat dim", style: "margin-left:8px" }, "@" + a.owner) : null]));
+      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
+      rm.addEventListener("click", () => { m.actionItems.splice(i, 1); save(); renderMinutes(); });
+      row.appendChild(rm);
+      app.appendChild(row);
+    });
+  }
+
+  // --- motions (filed via /motion, kept as free text) ---
+  const motions = (m.captures || []).filter(c => c.kind === "motion");
+  if (motions.length) {
+    app.appendChild(flatSectionLabel("Motions"));
+    motions.forEach(mo => {
+      const row = el("div", { class: "flat-row" });
+      row.appendChild(el("div", { class: "name" }, mo.text));
+      app.appendChild(row);
+    });
+  }
+
+  // --- notes by item (only items with actual notes) ---
+  const notedSections = m.sections.filter(s => s.notes && s.notes.trim());
+  if (notedSections.length) {
+    app.appendChild(flatSectionLabel("Notes by Item"));
+    notedSections.forEach(s => {
+      const field = el("div", { class: "field" });
+      field.appendChild(el("label", { class: "field-label" }, s.name));
+      const ta = el("textarea", { class: "underline-input" }, s.notes);
+      ta.value = s.notes;
+      ta.addEventListener("input", (e) => { s.notes = e.target.value; save(); });
+      field.appendChild(ta);
+      app.appendChild(field);
+    });
+  } else {
+    app.appendChild(flatSectionLabel("Notes by Item"));
+  }
+
+  const closingField = el("div", { class: "field" });
+  closingField.appendChild(el("label", { class: "field-label" }, "Closing Notes"));
+  const generalArea = el("textarea", { class: "underline-input", placeholder: "Anything for the record that didn't belong to one item." }, m.generalNotes);
+  generalArea.value = m.generalNotes;
+  generalArea.addEventListener("input", (e) => { m.generalNotes = e.target.value; save(); });
+  closingField.appendChild(generalArea);
+  app.appendChild(closingField);
+
+  if (m.breaks && m.breaks.length) {
+    const totalBreakSec = m.breaks.reduce((s, b) => s + ((b.endedAt || Date.now()) - b.startedAt) / 1000, 0);
+    app.appendChild(el("p", { style: "margin-top:8px" }, `${m.breaks.length} break${m.breaks.length === 1 ? "" : "s"} taken (${fmtMinutes(totalBreakSec)} total).`));
+  }
 }
 
 /* ---------- HISTORY VIEW ---------- */
@@ -1800,19 +1828,23 @@ function renderHistory() {
   clearTick();
   app.innerHTML = "";
   app.appendChild(renderTopbar("history"));
-  app.appendChild(el("h2", null, "Past Meetings"));
+
+  app.appendChild(el("div", { class: "page-eyebrow" }, "History"));
+  app.appendChild(el("h1", { class: "page-head" }, "Where the time goes"));
+  app.appendChild(el("p", { class: "page-sub" }, "Planned against actual for every item you've ever run, and one search across every note and decision."));
+  app.appendChild(el("hr", { class: "page-hr" }));
+
+  const searchInput = el("input", { type: "text", class: "underline-input underline-search", placeholder: "Search past notes, decisions, motions and actions" });
+  app.appendChild(searchInput);
+  const resultsEl = el("div", { style: "margin-top:8px" });
+  app.appendChild(resultsEl);
 
   if (state.history.length === 0) {
-    app.appendChild(el("div", { class: "card empty-state" }, "No saved meetings yet. Run a meeting and save it to see it here."));
+    app.appendChild(el("hr", { class: "page-hr" }));
+    app.appendChild(flatSectionLabel("Filed Meetings"));
+    app.appendChild(el("p", { class: "page-sub" }, "No filed meetings yet. Run one through and file it from the minutes."));
     return;
   }
-
-  const searchCard = el("div", { class: "card search-row" });
-  const searchInput = el("input", { type: "text", placeholder: "Search titles, decisions, action items, section notes..." });
-  searchCard.appendChild(searchInput);
-  const resultsEl = el("div", { style: "margin-top:8px" });
-  searchCard.appendChild(resultsEl);
-  app.appendChild(searchCard);
 
   searchInput.addEventListener("input", () => {
     const q = searchInput.value.trim().toLowerCase();
@@ -1862,9 +1894,9 @@ function renderHistory() {
     .slice(0, 8);
 
   if (analyticsRows.length > 0) {
-    const analyticsCard = el("div", { class: "card" });
-    analyticsCard.appendChild(el("h3", null, "Where the Time Actually Goes"));
-    analyticsCard.appendChild(el("p", null, "Average minutes over (red) or under (green) the planned time, by section name, across your history."));
+    app.appendChild(el("hr", { class: "page-hr" }));
+    app.appendChild(flatSectionLabel("Where the Time Actually Goes"));
+    app.appendChild(el("p", { class: "page-sub" }, "Average minutes over (red) or under (green) the planned time, by item name, across your history."));
     const maxAbs = Math.max(...analyticsRows.map(r => Math.abs(r.avg)), 1);
     const chart = el("div", { class: "overrun-chart" });
     analyticsRows.forEach(r => {
@@ -1877,17 +1909,15 @@ function renderHistory() {
       row.appendChild(el("div", { class: "amount" }, `${r.avg >= 0 ? "+" : ""}${Math.round(r.avg / 60)}m`));
       chart.appendChild(row);
     });
-    analyticsCard.appendChild(chart);
-    app.appendChild(analyticsCard);
+    app.appendChild(chart);
   }
 
-  const card = el("div", { class: "card" });
+  app.appendChild(el("hr", { class: "page-hr" }));
+  app.appendChild(flatSectionLabel("Filed Meetings"));
   state.history.forEach((m, idx) => {
-    const item = el("div", { class: "history-item" });
-    const left = el("div", null, [
-      el("div", { class: "name" }, m.title || "Untitled Meeting"),
-      el("div", { class: "date" }, fmtDateTime(m.createdAt)),
-    ]);
+    const row = el("div", { class: "flat-row" });
+    row.appendChild(el("div", { class: "name" }, m.title || "Untitled meeting"));
+    row.appendChild(el("div", { class: "stat dim" }, fmtDateTimeLower(m.createdAt)));
     const actions = el("div", { class: "row" });
     const viewBtn = el("button", { class: "btn btn-small" }, "View");
     viewBtn.addEventListener("click", (e) => { e.stopPropagation(); state.meeting = m; state.view = "minutes"; render(); });
@@ -1901,7 +1931,7 @@ function renderHistory() {
       renderHistory();
       showToast({
         kind: "undo",
-        message: `Deleted "${removed.title || "Untitled Meeting"}".`,
+        message: `Deleted "${removed.title || "Untitled meeting"}".`,
         onUndo: () => {
           state.history.splice(idx, 0, removed);
           save();
@@ -1912,11 +1942,9 @@ function renderHistory() {
     actions.appendChild(viewBtn);
     actions.appendChild(exportBtn);
     actions.appendChild(delBtn);
-    item.appendChild(left);
-    item.appendChild(actions);
-    card.appendChild(item);
+    row.appendChild(actions);
+    app.appendChild(row);
   });
-  app.appendChild(card);
 }
 
 /* ---------- master render ---------- */
