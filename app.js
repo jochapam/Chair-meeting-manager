@@ -1180,22 +1180,56 @@ function renderLive() {
   topbar.appendChild(el("div", { class: "cockpit-topbar-right" }, [el("span", null, m.title || "Untitled Meeting")]));
   header.appendChild(topbar);
 
-  // Current item bar: the primary thing on screen — what are we on right
-  // now, and how is it doing — appears first and largest. Its own
-  // countdown lives here too (not in the timing row below) since it's
-  // about this item specifically, and it's the number a chair actually
-  // watches most.
+  // Current item bar: everything a chair glances at lives in this one bar
+  // now — the item, its countdown, against-plan/projected-end context, and
+  // the transport controls — so there's only one banded row instead of two.
   const currentItemBar = el("div", { class: "current-item-bar" });
-  const itemBarTop = el("div", { class: "item-bar-top" });
-  itemBarTop.appendChild(el("div", { class: "notes-header" }, [
+  currentItemBar.appendChild(el("div", { class: "notes-header" }, [
     el("h2", null, sec.name),
   ]));
+
+  const itemBarTop = el("div", { class: "item-bar-top" });
+  const statsGroup = el("div", { class: "item-bar-stats" });
+
+  const planStat = el("div", { class: "hero-stat" });
+  planStat.appendChild(el("div", { class: "hero-label" }, "Against plan"));
+  const badgeInfo0 = scheduleBadgeInfo();
+  const scheduleBadgeEl = el("div", { id: "schedule-badge", class: `hero-value hero-big schedule-badge ${badgeInfo0.cls}` }, badgeInfo0.word);
+  planStat.appendChild(scheduleBadgeEl);
+  statsGroup.appendChild(planStat);
+
+  const endStat = el("div", { class: "hero-stat" });
+  endStat.appendChild(el("div", { class: "hero-label" }, "Projected end"));
+  const projectedEndEl = el("div", { id: "projected-end", class: "hero-value" }, fmtTimeOfDay(stats.projectedEndTs));
+  endStat.appendChild(projectedEndEl);
+  statsGroup.appendChild(endStat);
 
   const itemTimerBlock = el("div", { class: "item-timer-block" });
   const remainValueClass = isOvertime ? "item-timer-value overtime" : (pct > 85 ? "item-timer-value warn" : "item-timer-value");
   const remainValueEl = el("div", { id: "timer-display", class: remainValueClass }, fmtClock(remaining));
   itemTimerBlock.appendChild(remainValueEl);
-  itemBarTop.appendChild(itemTimerBlock);
+  statsGroup.appendChild(itemTimerBlock);
+  itemBarTop.appendChild(statsGroup);
+
+  const heroActions = el("div", { class: "hero-actions" });
+  const pauseBtn = el("button", null, m.timerStatus === "running" ? "Pause" : "Resume");
+  pauseBtn.addEventListener("click", togglePause);
+  const breakBtn = el("button", null, "Break");
+  breakBtn.addEventListener("click", takeBreak);
+  const topEndBtn = el("button", { class: "primary" }, "End Meeting");
+  topEndBtn.addEventListener("click", () => {
+    showToast({
+      kind: "confirm",
+      message: "End the meeting now and go to notes & minutes?",
+      confirmLabel: "End Meeting",
+      onConfirm: endMeeting,
+    });
+  });
+  heroActions.appendChild(pauseBtn);
+  heroActions.appendChild(breakBtn);
+  heroActions.appendChild(topEndBtn);
+  itemBarTop.appendChild(heroActions);
+
   currentItemBar.appendChild(itemBarTop);
 
   const track = el("div", { class: "progress-track" });
@@ -1215,44 +1249,6 @@ function renderLive() {
   motionBtn.addEventListener("click", () => stampFromToolbar("motion"));
 
   header.appendChild(currentItemBar);
-
-  // Timing: supporting meeting-level context, smaller than the item bar
-  // above it.
-  const hero = el("div", { class: "cockpit-hero" });
-
-  const planStat = el("div", { class: "hero-stat" });
-  planStat.appendChild(el("div", { class: "hero-label" }, "Against plan"));
-  const badgeInfo0 = scheduleBadgeInfo();
-  const scheduleBadgeEl = el("div", { id: "schedule-badge", class: `hero-value hero-big schedule-badge ${badgeInfo0.cls}` }, badgeInfo0.word);
-  planStat.appendChild(scheduleBadgeEl);
-  hero.appendChild(planStat);
-
-  const endStat = el("div", { class: "hero-stat" });
-  endStat.appendChild(el("div", { class: "hero-label" }, "Projected end"));
-  const projectedEndEl = el("div", { id: "projected-end", class: "hero-value" }, fmtTimeOfDay(stats.projectedEndTs));
-  endStat.appendChild(projectedEndEl);
-  hero.appendChild(endStat);
-
-  const heroActions = el("div", { class: "hero-actions" });
-  const pauseBtn = el("button", null, m.timerStatus === "running" ? "Pause" : "Resume");
-  pauseBtn.addEventListener("click", togglePause);
-  const breakBtn = el("button", null, "Break");
-  breakBtn.addEventListener("click", takeBreak);
-  const topEndBtn = el("button", { class: "primary" }, "End Meeting");
-  topEndBtn.addEventListener("click", () => {
-    showToast({
-      kind: "confirm",
-      message: "End the meeting now and go to notes & minutes?",
-      confirmLabel: "End Meeting",
-      onConfirm: endMeeting,
-    });
-  });
-  heroActions.appendChild(pauseBtn);
-  heroActions.appendChild(breakBtn);
-  heroActions.appendChild(topEndBtn);
-  hero.appendChild(heroActions);
-
-  header.appendChild(hero);
 
   cockpit.appendChild(header);
 
