@@ -147,6 +147,53 @@ test("reopening the tab after a long absence also pauses rather than charging th
 });
 
 /* =====================================================================
+   The exported record reports what actually happened
+   ===================================================================== */
+
+test("exported duration counts only items that actually ran", async (page, origin) => {
+  await openApp(page, origin, { items: ["Opening", "Never reached A", "Never reached B"] });
+  await startMeeting(page);
+  await page.clock.install(); // freeze so "actual" is a stable, tiny number
+  await endMeeting(page); // ends on item 1; the other two never ran
+
+  const md = await page.evaluate(() =>
+    buildMinutesMarkdown(JSON.parse(localStorage.getItem("chair-meeting-manager:v1")).meeting));
+
+  const actual = md.match(/\*\*Actual duration:\*\* (\d+) min/);
+  assert(actual, `markdown should report an actual duration:\n${md}`);
+  assert(
+    Number(actual[1]) < 5,
+    `only item 1 ran, so actual must be near zero — not the 20 min of unrun budget (got ${actual[1]} min)`,
+  );
+  assert(md.includes("2 items not reached"), "the export should say two items were never reached");
+});
+
+test("viewing a filed meeting offers a way back, not a second filing", async (page, origin) => {
+  await openApp(page, origin);
+  await startMeeting(page);
+  await endMeeting(page);
+  await page.click('button:has-text("File Meeting")');
+  await page.waitForSelector("text=Prepare the meeting");
+
+  await clickNav(page, "History");
+  await page.waitForSelector('.flat-row button:has-text("View")');
+  assertEqual((await readState(page)).history.length, 1, "one meeting should be filed");
+
+  await page.click('.flat-row button:has-text("View")');
+  await page.waitForSelector(".page-eyebrow");
+
+  assert(
+    await page.$('button:has-text("Back to History")'),
+    "an already-filed meeting should offer 'Back to History', not 'File Meeting'",
+  );
+  assert(!(await page.$('button:has-text("File Meeting")')), "'File Meeting' must not be offered twice");
+
+  await page.click('button:has-text("Back to History")');
+  await page.waitForSelector("text=Where the time goes");
+  assertEqual((await readState(page)).history.length, 1, "returning must not duplicate the entry");
+});
+
+/* =====================================================================
    runner
    ===================================================================== */
 
