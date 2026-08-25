@@ -133,8 +133,6 @@ function newMeeting() {
     currentIndex: -1,
     timerStatus: "idle", // idle | running | paused | ended
     generalNotes: "",
-    decisions: [],
-    actionItems: [],
     breaks: [], // {startedAt, endedAt} — endedAt null while a break is in progress
     captures: [], // {id, kind: decision|action|motion, text, owner, sectionName, timestamp} filed from notes
     deferred: [], // sections removed mid-meeting to carry to next time: {id, name, originalPlannedSeconds, deferredAt}
@@ -338,8 +336,6 @@ function fileCapture(kind, text, owner) {
   const sec = currentSection();
   if (!sec) return;
   m.captures.push({ id: uid(), kind, text, owner: owner || "", sectionName: sec.name, timestamp: Date.now() });
-  if (kind === "decision") m.decisions.push(text);
-  if (kind === "action") m.actionItems.push({ text, owner: owner || "" });
   save();
   updateCapturesPanel();
 }
@@ -510,18 +506,20 @@ function buildMinutesMarkdown(m) {
     lines.push("");
   }
 
-  if (m.decisions.length) {
+  const decisions = (m.captures || []).filter(c => c.kind === "decision");
+  if (decisions.length) {
     lines.push("## Decisions");
     lines.push("");
-    for (const d of m.decisions) lines.push(`- ${d}`);
+    for (const d of decisions) lines.push(`- ${d.text} _(${d.sectionName})_`);
     lines.push("");
   }
 
-  if (m.actionItems.length) {
+  const actionItems = (m.captures || []).filter(c => c.kind === "action");
+  if (actionItems.length) {
     lines.push("## Action Items");
     lines.push("");
-    for (const a of m.actionItems) {
-      lines.push(`- [ ] ${a.text}${a.owner ? ` (Owner: ${a.owner})` : ""}`);
+    for (const a of actionItems) {
+      lines.push(`- [ ] ${a.text}${a.owner ? ` (Owner: ${a.owner})` : ""} _(${a.sectionName})_`);
     }
     lines.push("");
   }
@@ -530,7 +528,7 @@ function buildMinutesMarkdown(m) {
   if (motions.length) {
     lines.push("## Motions");
     lines.push("");
-    for (const mo of motions) lines.push(`- ${mo.text}`);
+    for (const mo of motions) lines.push(`- ${mo.text} _(${mo.sectionName})_`);
     lines.push("");
   }
 
@@ -1018,8 +1016,6 @@ function resetMeeting() {
   m.breaks = [];
   m.captures = [];
   m.deferred = [];
-  m.decisions = [];
-  m.actionItems = [];
   m.generalNotes = "";
   for (const s of m.sections) {
     s.status = "upcoming";
@@ -1756,39 +1752,56 @@ function renderMinutes() {
     });
   }
 
-  // --- decisions ---
-  if (m.decisions.length) {
+  // Decisions, Action Items and Motions are all just filtered views over
+  // m.captures — the one place that actually remembers which agenda item
+  // each was filed under. Deleting a row removes that capture directly,
+  // so there's no second list to fall out of sync with.
+  function removeCaptureRow(c) {
+    const idx = m.captures.findIndex(x => x.id === c.id);
+    if (idx !== -1) m.captures.splice(idx, 1);
+    save();
+    renderMinutes();
+  }
+
+  const decisions = (m.captures || []).filter(c => c.kind === "decision");
+  if (decisions.length) {
     app.appendChild(flatSectionLabel("Decisions"));
-    m.decisions.forEach((d, i) => {
+    decisions.forEach(d => {
       const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, d));
+      row.appendChild(el("div", { class: "name" }, [d.text, el("span", { class: "stat dim", style: "margin-left:8px" }, d.sectionName)]));
       const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
-      rm.addEventListener("click", () => { m.decisions.splice(i, 1); save(); renderMinutes(); });
+      rm.addEventListener("click", () => removeCaptureRow(d));
       row.appendChild(rm);
       app.appendChild(row);
     });
   }
 
-  // --- action items ---
-  if (m.actionItems.length) {
+  const actionItems = (m.captures || []).filter(c => c.kind === "action");
+  if (actionItems.length) {
     app.appendChild(flatSectionLabel("Action Items"));
-    m.actionItems.forEach((a, i) => {
+    actionItems.forEach(a => {
       const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, [a.text, a.owner ? el("span", { class: "stat dim", style: "margin-left:8px" }, "@" + a.owner) : null]));
+      row.appendChild(el("div", { class: "name" }, [
+        a.text,
+        a.owner ? el("span", { class: "stat dim", style: "margin-left:8px" }, "@" + a.owner) : null,
+        el("span", { class: "stat dim", style: "margin-left:8px" }, a.sectionName),
+      ]));
       const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
-      rm.addEventListener("click", () => { m.actionItems.splice(i, 1); save(); renderMinutes(); });
+      rm.addEventListener("click", () => removeCaptureRow(a));
       row.appendChild(rm);
       app.appendChild(row);
     });
   }
 
-  // --- motions (filed via /motion, kept as free text) ---
   const motions = (m.captures || []).filter(c => c.kind === "motion");
   if (motions.length) {
     app.appendChild(flatSectionLabel("Motions"));
     motions.forEach(mo => {
       const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, mo.text));
+      row.appendChild(el("div", { class: "name" }, [mo.text, el("span", { class: "stat dim", style: "margin-left:8px" }, mo.sectionName)]));
+      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
+      rm.addEventListener("click", () => removeCaptureRow(mo));
+      row.appendChild(rm);
       app.appendChild(row);
     });
   }
@@ -1856,8 +1869,7 @@ function renderHistory() {
     for (const m of state.history) {
       const hay = [
         m.title,
-        ...m.decisions,
-        ...m.actionItems.map(a => a.text),
+        ...(m.captures || []).map(c => c.text),
         ...m.sections.map(s => s.notes),
         m.generalNotes,
       ].join(" \n ").toLowerCase();
