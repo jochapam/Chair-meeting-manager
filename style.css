@@ -991,3 +991,33 @@ table.minutes-table th {
   .hero-value.hero-big { font-size: 1.3rem; }
   .cockpit-topbar-right { display: none; }
 }
+
+/* ---------- print ---------- */
+/* The Minutes screen is the only thing worth printing. Everything that's
+   there to click — nav, export buttons, delete crosses, the toast — is
+   noise on paper, and the editable fields should read as plain text. */
+@media print {
+  :root { --bg: #fff; --surface: #fff; --surface-2: #fff; }
+  body { background: #fff; }
+  #app { max-width: none; padding: 0; }
+
+  .topbar, .nav-links, .toast, .thumb-rail,
+  .btn, .btn-icon, .page-eyebrow { display: none !important; }
+
+  .page-head { font-size: 1.6rem; }
+  .page-hr { border-top-color: #000; }
+
+  /* Editable fields print as the text they hold, not as form controls. */
+  textarea, input {
+    border: none !important;
+    background: none !important;
+    padding: 0 !important;
+    resize: none;
+    color: #000;
+  }
+  textarea { height: auto; min-height: 0; overflow: visible; }
+
+  .flat-row { break-inside: avoid; }
+  .section-label-row { break-after: avoid; }
+  .field { break-inside: avoid; }
+}
