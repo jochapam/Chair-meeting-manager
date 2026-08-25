@@ -3,13 +3,22 @@
 /* ---------- constants ---------- */
 
 const STORAGE_KEY = "chair-meeting-manager:v1";
+// Written every tick, so it lives in its own key rather than forcing a
+// full re-serialise of the whole state once a second.
+const LAST_SEEN_KEY = "chair-meeting-manager:last-seen";
 const MIN_SECTION_SECONDS = 60; // a section can never be auto-shrunk below this
+// A jump larger than this between two ticks (or across a reload) means the
+// machine slept or the tab was closed — not that the item genuinely ran
+// that long. Comfortably above the ~60s ticks a throttled background tab
+// still fires, so switching away for a moment doesn't trip it.
+const IDLE_GAP_SECONDS = 120;
 
 /* ---------- state ---------- */
 
 let state = loadState();
 let tickHandle = null;
 let liveRefs = null; // DOM references for surgical per-second updates on the live view
+let lastTickAt = Date.now(); // wall clock at the previous tick, to spot sleep/suspend gaps
 
 function defaultState() {
   return {
@@ -35,6 +44,15 @@ function loadState() {
 
 function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function markSeen(ts) {
+  try { localStorage.setItem(LAST_SEEN_KEY, String(ts)); } catch (e) { /* quota — not worth failing a tick over */ }
+}
+
+function lastSeenAt() {
+  const raw = Number(localStorage.getItem(LAST_SEEN_KEY));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
 function uid() {
@@ -371,8 +389,7 @@ function togglePause() {
   } else if (m.timerStatus === "paused") {
     sec.startedAt = Date.now();
     m.timerStatus = "running";
-    const openBreak = m.breaks[m.breaks.length - 1];
-    if (openBreak && openBreak.endedAt === null) openBreak.endedAt = Date.now();
+    closeOpenBreaks(m, Date.now());
   }
   save();
   renderLive();
@@ -385,6 +402,10 @@ function takeBreak() {
   const m = state.meeting;
   const sec = currentSection();
   if (!sec) return;
+  // Already on a break: don't open a second one. Only the most recent open
+  // break ever gets closed on resume, so a stacked one would stay open for
+  // the life of the meeting and inflate every break total that reads it.
+  if (m.breaks.some(b => b.endedAt == null)) return;
   if (m.timerStatus === "running") {
     sec.pausedAccum = elapsedSeconds(sec);
     sec.startedAt = null;
@@ -466,9 +487,46 @@ function endMeeting() {
   }
   m.timerStatus = "ended";
   m.endedAt = Date.now();
+  // Close any break still open, so its duration is fixed at the moment the
+  // meeting ended. Left open, every later read of the minutes would measure
+  // it against "now" and the filed record would keep growing.
+  closeOpenBreaks(m, m.endedAt);
   state.view = "minutes";
   save();
   render();
+}
+
+// A break with no endedAt is still running. Anything that finishes a
+// meeting (or resumes from a break) has to close it, or duration maths
+// downstream measures it against the current time forever.
+function closeOpenBreaks(m, at) {
+  if (!m || !m.breaks) return;
+  for (const b of m.breaks) {
+    if (b.endedAt == null) b.endedAt = at;
+  }
+}
+
+// Total time spent in breaks. Falls back to the meeting's end (not "now")
+// for any break that was somehow left open, so a filed meeting always
+// reports the same number no matter when it's read.
+function breakTotalSeconds(m) {
+  if (!m || !m.breaks || !m.breaks.length) return 0;
+  const fallback = m.endedAt || Date.now();
+  return m.breaks.reduce((s, b) => s + ((b.endedAt ?? fallback) - b.startedAt) / 1000, 0);
+}
+
+// A meeting is "filed" once a copy of it is in history. Keyed on id rather
+// than a flag so that viewing a history entry (which points state.meeting
+// straight at it) correctly reports as already filed.
+function isFiled(m) {
+  return !!m && state.history.some(h => h.id === m.id);
+}
+
+// Idempotent: filing twice is a no-op rather than a duplicate entry.
+function fileMeeting(m) {
+  if (!m || isFiled(m)) return false;
+  state.history.unshift(JSON.parse(JSON.stringify(m)));
+  return true;
 }
 
 /* ---------- markdown export ---------- */
@@ -484,8 +542,7 @@ function buildMinutesMarkdown(m) {
   lines.push(`- **Planned duration:** ${fmtMinutes(totalPlanned)}`);
   lines.push(`- **Actual duration:** ${fmtMinutes(totalActual)}`);
   if (m.breaks && m.breaks.length) {
-    const totalBreakSec = m.breaks.reduce((s, b) => s + ((b.endedAt || Date.now()) - b.startedAt) / 1000, 0);
-    lines.push(`- **Breaks:** ${m.breaks.length} (${fmtMinutes(totalBreakSec)} total)`);
+    lines.push(`- **Breaks:** ${m.breaks.length} (${fmtMinutes(breakTotalSeconds(m))} total)`);
   }
   lines.push("");
 
@@ -788,6 +845,19 @@ function navButtons(activeKey) {
   if (meetingActive) {
     prepareBtn.disabled = true;
     prepareBtn.title = "Finish or end the current meeting first";
+  } else if (meetingEnded && !isFiled(m)) {
+    // Preparing a new meeting replaces this one. It's finished but not yet
+    // in history, so leaving without filing would lose the whole record —
+    // ask rather than assume.
+    prepareBtn.title = "These minutes aren't filed yet";
+    prepareBtn.addEventListener("click", () => {
+      showToast({
+        kind: "confirm",
+        message: `"${m.title || "Untitled meeting"}" hasn't been filed yet. File it to History before starting a new meeting?`,
+        confirmLabel: "File & Continue",
+        onConfirm: () => { fileMeeting(m); save(); switchView("setup"); },
+      });
+    });
   } else {
     prepareBtn.addEventListener("click", () => switchView("setup"));
   }
@@ -838,6 +908,10 @@ function agendaTotalMinutes(sections) {
 function renderSetup() {
   clearTick();
   if (!state.meeting || state.meeting.timerStatus !== "idle") {
+    // Last-resort safety net. The nav asks before it gets here, but any
+    // other route into Setup must still never drop a finished meeting on
+    // the floor — file it instead of overwriting it.
+    if (state.meeting && state.meeting.timerStatus === "ended") fileMeeting(state.meeting);
     state.meeting = newMeeting();
     save();
   }
@@ -1537,13 +1611,48 @@ function updateLiveDisplays(reclaimHappened) {
   }
 }
 
+// Wall clock jumped by more than IDLE_GAP_SECONDS: the machine slept, or
+// the tab was closed and reopened. That time didn't belong to the current
+// item, so hand it back and pause rather than letting the auto-reclaim
+// treat it as a genuine overrun and shave every upcoming item to its floor.
+// Returns true if a gap was absorbed.
+function absorbIdleGap(gapSeconds) {
+  const m = state.meeting;
+  if (!m || m.timerStatus !== "running") return false;
+  if (gapSeconds <= IDLE_GAP_SECONDS) return false;
+  const sec = currentSection();
+  if (!sec) return false;
+
+  const elapsed = elapsedSeconds(sec);
+  sec.pausedAccum = Math.max(0, elapsed - gapSeconds);
+  sec.startedAt = null;
+  m.timerStatus = "paused";
+  save();
+
+  const mins = Math.max(1, Math.round(gapSeconds / 60));
+  showToast({
+    message: `Paused — this tab was asleep for about ${mins} min. That time wasn't charged to "${sec.name}".`,
+    duration: 8000,
+  });
+  return true;
+}
+
 function startTick() {
   clearTick();
+  lastTickAt = Date.now();
   tickHandle = setInterval(() => {
     const m = state.meeting;
     if (!m) { clearTick(); return; }
     const sec = currentSection();
     if (!sec) { clearTick(); return; }
+
+    // Measure the gap before anything else: a suspended tab resumes with
+    // one enormous tick, and the reclaim below must not see that as overrun.
+    const now = Date.now();
+    const gapSeconds = (now - lastTickAt) / 1000;
+    lastTickAt = now;
+    markSeen(now);
+    if (absorbIdleGap(gapSeconds)) { renderLive(); return; }
 
     let reclaimHappened = false;
 
@@ -1832,8 +1941,7 @@ function renderMinutes() {
   app.appendChild(closingField);
 
   if (m.breaks && m.breaks.length) {
-    const totalBreakSec = m.breaks.reduce((s, b) => s + ((b.endedAt || Date.now()) - b.startedAt) / 1000, 0);
-    app.appendChild(el("p", { style: "margin-top:8px" }, `${m.breaks.length} break${m.breaks.length === 1 ? "" : "s"} taken (${fmtMinutes(totalBreakSec)} total).`));
+    app.appendChild(el("p", { style: "margin-top:8px" }, `${m.breaks.length} break${m.breaks.length === 1 ? "" : "s"} taken (${fmtMinutes(breakTotalSeconds(m))} total).`));
   }
 }
 
@@ -1978,5 +2086,12 @@ if (state.meeting) {
   if (state.meeting.timerStatus === "running" || state.meeting.timerStatus === "paused") state.view = "live";
   else if (state.meeting.timerStatus === "ended") state.view = "minutes";
 }
+
+// Reopening after the tab was closed for a while is the same problem as
+// waking from sleep: the clock kept moving but the meeting wasn't running.
+const seen = lastSeenAt();
+if (state.meeting && seen) absorbIdleGap((Date.now() - seen) / 1000);
+lastTickAt = Date.now();
+markSeen(lastTickAt);
 
 render();
