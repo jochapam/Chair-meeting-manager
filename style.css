@@ -717,33 +717,6 @@ table.minutes-table th {
 .hero-actions button.primary:hover { background: var(--accent-dark); }
 .hero-actions button.danger:hover { background: var(--line); color: #fff; }
 
-.exhausted-banner {
-  display: none;
-  border-top: 2px solid var(--line);
-  border-left: 4px solid var(--accent);
-  background: var(--surface-2);
-  padding: 8px 16px;
-  font-size: 0.8rem;
-  color: var(--text);
-}
-.exhausted-banner.visible { display: block; }
-
-/* Quiet by design — a thin accent rule, not a full-colour fill, so this
-   doesn't outweigh the item bar above it. */
-.realloc-strip {
-  display: none;
-  border-top: 2px solid var(--line);
-  border-left: 4px solid var(--accent);
-  background: var(--surface-2);
-  align-items: center;
-  gap: 0;
-  flex-wrap: wrap;
-}
-.realloc-strip.visible { display: flex; }
-.realloc-strip .realloc-text { padding: 8px 16px; flex: 1; min-width: 260px; font-size: 0.82rem; color: var(--text); }
-.realloc-strip .realloc-text .breakdown { color: var(--text-dim); font-family: "Archivo Narrow", sans-serif; font-size: 0.75rem; margin-left: 6px; }
-.realloc-strip .realloc-text .exhausted-note { display: block; margin-top: 2px; font-size: 0.78rem; color: var(--text-dim); }
-
 .cockpit-body { flex: 1; display: grid; grid-template-columns: var(--rail-w, 280px) 1fr var(--captures-w, 260px); align-items: stretch; }
 .cockpit-body.no-captures { grid-template-columns: 300px 1fr; }
 

@@ -119,7 +119,6 @@ function newSection(name, minutes) {
     wasExtended: false,
     wasShrunk: false,
     autoReclaimed: 0, // seconds already pulled from upcoming sections due to running overtime
-    reallocation: null, // { total, breakdown: {sectionId: seconds} } — set while this section is current
   };
 }
 
@@ -137,7 +136,6 @@ function newMeeting() {
     decisions: [],
     actionItems: [],
     breaks: [], // {startedAt, endedAt} — endedAt null while a break is in progress
-    agendaExhausted: false, // true once an overrun couldn't be fully absorbed (upcoming sections floored)
     captures: [], // {id, kind: decision|action|motion, text, owner, sectionName, timestamp} filed from notes
     deferred: [], // sections removed mid-meeting to carry to next time: {id, name, originalPlannedSeconds, deferredAt}
   };
@@ -299,60 +297,15 @@ function shrinkUpcomingSections(neededSeconds) {
   return neededSeconds - remaining; // amount actually reclaimed
 }
 
-// Runs a reclaim attempt, tracks who gave up what (for the reallocation
-// strip), and updates the "agenda exhausted" flag.
-function reclaimTime(neededSeconds, sec) {
-  const m = state.meeting;
-  const before = new Map(m.sections.filter(s => s.status === "upcoming").map(s => [s.id, s.plannedSeconds]));
-  const reclaimed = shrinkUpcomingSections(neededSeconds);
-  m.agendaExhausted = reclaimed < neededSeconds - 0.5;
-  if (!sec.reallocation) sec.reallocation = { total: 0, breakdown: {} };
-  sec.reallocation.total += reclaimed;
-  for (const [id, prevPlanned] of before) {
-    const s2 = m.sections.find(x => x.id === id);
-    if (!s2) continue;
-    const delta = prevPlanned - s2.plannedSeconds;
-    if (delta > 0.5) sec.reallocation.breakdown[id] = (sec.reallocation.breakdown[id] || 0) + delta;
-  }
-  return reclaimed;
-}
-
 function extendCurrentSection(minutes) {
   const sec = currentSection();
   if (!sec) return;
   const addSeconds = minutes * 60;
   sec.plannedSeconds += addSeconds;
   sec.wasExtended = true;
-  reclaimTime(addSeconds, sec);
+  shrinkUpcomingSections(addSeconds);
   save();
   renderLive();
-}
-
-function reallocIsVisible(sec) {
-  return !!(sec && sec.reallocation && sec.reallocation.total > 0.5);
-}
-
-// Shared between the initial render and the surgical tick update, so the
-// breakdown text is built in exactly one place. Purely informational — the
-// auto-reclaim just runs. When the agenda is also exhausted, that note
-// folds into the same bar instead of getting its own full-width row.
-function buildReallocStripContent(stripEl, sec, m) {
-  stripEl.innerHTML = "";
-  const breakdownText = Object.entries(sec.reallocation.breakdown)
-    .map(([id, amt]) => {
-      const s2 = m.sections.find(x => x.id === id);
-      return s2 ? `${s2.name} −${fmtMinutes(amt)}` : null;
-    })
-    .filter(Boolean)
-    .join(" · ");
-  const textChildren = [
-    `${fmtMinutes(sec.reallocation.total)} needs a home.`,
-    el("span", { class: "breakdown" }, breakdownText),
-  ];
-  if (m.agendaExhausted) {
-    textChildren.push(el("span", { class: "exhausted-note" }, "Agenda can't absorb any more — upcoming items are already at their 1-minute floor."));
-  }
-  stripEl.appendChild(el("div", { class: "realloc-text" }, textChildren));
 }
 
 function deferSection(id) {
@@ -1050,7 +1003,6 @@ function resetMeeting() {
   m.createdAt = null;
   m.endedAt = null;
   m.breaks = [];
-  m.agendaExhausted = false;
   m.captures = [];
   m.deferred = [];
   m.decisions = [];
@@ -1065,7 +1017,6 @@ function resetMeeting() {
     s.wasExtended = false;
     s.wasShrunk = false;
     s.autoReclaimed = 0;
-    s.reallocation = null;
     s.plannedSeconds = s.originalPlannedSeconds;
   }
   save();
@@ -1304,22 +1255,6 @@ function renderLive() {
 
   header.appendChild(hero);
 
-  // Reallocation strip — legible, reversible overrun handling, kept quiet
-  // (neutral background, a thin accent rule) so it doesn't outweigh the
-  // item bar above it. When the agenda is also exhausted, that note folds
-  // into this same bar rather than getting a second full-width row (see
-  // buildReallocStripContent).
-  const reallocVisible = reallocIsVisible(sec);
-  const reallocStrip = el("div", { id: "realloc-strip", class: "realloc-strip" + (reallocVisible ? " visible" : "") });
-  if (reallocVisible) buildReallocStripContent(reallocStrip, sec, m);
-  header.appendChild(reallocStrip);
-
-  // Standalone only when there's no realloc strip to fold the note into.
-  const exhaustedStandalone = m.agendaExhausted && !reallocVisible;
-  const exhaustedBannerEl = el("div", { id: "exhausted-banner", class: "exhausted-banner" + (exhaustedStandalone ? " visible" : "") },
-    "Agenda can't absorb any more time — upcoming sections are already down to their 1-minute floor.");
-  header.appendChild(exhaustedBannerEl);
-
   cockpit.appendChild(header);
 
   /* ---- body: agenda rail + notes centre + captures rail ---- */
@@ -1542,9 +1477,9 @@ function railBadges(s, isNextUp) {
 
 // Refreshes every DOM node that can change from a pure tick — the current
 // item's countdown/progress, the header's projected-end and against-plan
-// numbers, and (only when a reclaim just happened) the rail's shrunk/
-// extended indicators plus the reallocation strip. Deliberately never
-// touches the notes textarea or rebuilds the DOM: this is what used to be
+// numbers, and (only when a reclaim just happened) the rail's live meta
+// text and badges. Deliberately never touches the notes textarea or
+// rebuilds the DOM: this is what used to be
 // a full renderLive() every second, which fought typing during an
 // overrun. Runs whether the meeting is running or paused, since projected
 // end must keep drifting later in real time even while the section clock
@@ -1578,11 +1513,6 @@ function updateLiveDisplays(reclaimHappened) {
     badgeEl.className = `hero-value hero-big schedule-badge ${badgeInfo.cls}`;
   }
 
-  // Standalone only when there's no realloc strip to fold the note into.
-  const reallocVisible = reallocIsVisible(sec);
-  const exhaustedBannerEl = document.getElementById("exhausted-banner");
-  if (exhaustedBannerEl) exhaustedBannerEl.classList.toggle("visible", !!m.agendaExhausted && !reallocVisible);
-
   if (reclaimHappened) {
     m.sections.forEach((s, idx) => {
       if (s.status === "done") return;
@@ -1595,15 +1525,6 @@ function updateLiveDisplays(reclaimHappened) {
         for (const b of railBadges(s, isNextUp)) badgesEl.appendChild(b);
       }
     });
-    // Reallocation strip needs a full rebuild of its content (breakdown
-    // text changes), but that's a small, isolated subtree — not the
-    // notes textarea — so a targeted replace here is safe.
-    const stripEl = document.getElementById("realloc-strip");
-    if (stripEl && sec) {
-      stripEl.className = "realloc-strip" + (reallocVisible ? " visible" : "");
-      if (reallocVisible) buildReallocStripContent(stripEl, sec, m);
-      else stripEl.innerHTML = "";
-    }
   }
 }
 
@@ -1628,7 +1549,7 @@ function startTick() {
       const alreadyReclaimed = sec.autoReclaimed;
       const toReclaim = overage - alreadyReclaimed;
       if (toReclaim > 0.5) {
-        reclaimTime(toReclaim, sec);
+        shrinkUpcomingSections(toReclaim);
         sec.autoReclaimed = alreadyReclaimed + toReclaim;
         sec.wasExtended = true;
         save();
