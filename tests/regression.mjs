@@ -194,6 +194,113 @@ test("viewing a filed meeting offers a way back, not a second filing", async (pa
 });
 
 /* =====================================================================
+   Notes and titles are data, never markup
+   ===================================================================== */
+
+test("history search renders user text literally instead of as HTML", async (page, origin) => {
+  const nastyTitle = '<img src=x onerror="window.__executed=1">Board & <Co>';
+  await openApp(page, origin, { title: nastyTitle, items: ["Opening"] });
+  await startMeeting(page);
+  await typeNote(page, "zebra marker\n");
+  await endMeeting(page);
+  await page.click('button:has-text("File Meeting")');
+  await page.waitForSelector("text=Prepare the meeting");
+
+  await clickNav(page, "History");
+  await page.fill(".underline-search", "zebra");
+  await page.waitForSelector(".search-match");
+
+  assert(!(await page.evaluate(() => window.__executed)), "markup in a title must not execute");
+  const shown = await page.$eval(".search-match strong", e => e.textContent);
+  assertEqual(shown, nastyTitle, "the title should be shown verbatim, tags and all");
+  assert(await page.$(".search-match mark"), "the matched term should still be highlighted");
+});
+
+/* =====================================================================
+   Agenda editing on the Prepare screen
+   ===================================================================== */
+
+test("reordering the agenda renumbers the rows", async (page, origin) => {
+  await openApp(page, origin, { items: ["Alpha", "Beta", "Gamma"] });
+  const rows = () => page.$$eval(".section-row", rs =>
+    rs.map(r => `${r.querySelector(".item-num").textContent}:${r.querySelector(".name-input").value}`));
+  assertEqual(await rows(), ["1:Alpha", "2:Beta", "3:Gamma"], "starting order");
+
+  const handles = await page.$$(".section-row .drag-handle");
+  const last = await handles[2].boundingBox();
+  const first = await handles[0].boundingBox();
+  await page.mouse.move(last.x + 5, last.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(first.x + 5, first.y - 10, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+
+  assertEqual(await rows(), ["1:Gamma", "2:Alpha", "3:Beta"], "numbers must follow the new order");
+  assertEqual(
+    (await readState(page)).meeting.sections.map(s => s.name), ["Gamma", "Alpha", "Beta"],
+    "stored order should match what's on screen",
+  );
+});
+
+test("the agenda drag handler is attached once, not once per re-render", async (page, origin) => {
+  await page.addInitScript(() => {
+    window.__dragHandlers = 0;
+    const add = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, ...rest) {
+      if (type === "pointerdown" && this.id === "section-list") window.__dragHandlers++;
+      return add.call(this, type, ...rest);
+    };
+  });
+  await openApp(page, origin, { items: ["A", "B", "C", "D"] });
+  assertEqual(await page.evaluate(() => window.__dragHandlers), 1,
+    "adding items must not stack another drag handler each time");
+});
+
+/* =====================================================================
+   Stepping back and forth doesn't lose time or position
+   ===================================================================== */
+
+test("stepping back and forward again keeps the time each item had banked", async (page, origin) => {
+  await page.clock.install({ time: new Date("2026-01-01T09:00:00") });
+  await openApp(page, origin, { items: ["First", "Second"] });
+  await startMeeting(page);
+
+  await page.clock.runFor(30000);            // 30s on First
+  await page.click('button:has-text("Next Item")');
+  await page.waitForTimeout(100);
+  await page.clock.runFor(10000);            // 10s on Second
+
+  await page.click('button:has-text("Previous Item")');
+  await page.waitForTimeout(100);
+  let secs = (await readState(page)).meeting.sections;
+  assert(Math.round(secs[0].pausedAccum) >= 29, `First should resume near 30s, got ${Math.round(secs[0].pausedAccum)}s`);
+  assert(Math.round(secs[1].pausedAccum) >= 9, `Second's 10s must not be discarded, got ${Math.round(secs[1].pausedAccum)}s`);
+
+  await page.click('button:has-text("Next Item")');
+  await page.waitForTimeout(100);
+  secs = (await readState(page)).meeting.sections;
+  assert(Math.round(secs[1].pausedAccum) >= 9,
+    `coming forward should resume Second, not restart it (got ${Math.round(secs[1].pausedAccum)}s)`);
+});
+
+test("un-deferring an item puts it back where it was", async (page, origin) => {
+  await openApp(page, origin, { items: ["A", "B", "C", "D"] });
+  await startMeeting(page); // A is current; B, C, D upcoming
+
+  const cRow = page.locator(".agenda-item", { hasText: "C" }).first();
+  await cRow.locator(".icon-btn", { hasText: "✕" }).click();
+  await page.waitForTimeout(150);
+  assertEqual((await readState(page)).meeting.sections.map(s => s.name), ["A", "B", "D"], "C deferred");
+
+  await page.click('.deferred-row button:has-text("Undo")');
+  await page.waitForTimeout(150);
+  assertEqual(
+    (await readState(page)).meeting.sections.map(s => s.name), ["A", "B", "C", "D"],
+    "C should return to its original slot, not the end of the agenda",
+  );
+});
+
+/* =====================================================================
    runner
    ===================================================================== */
 

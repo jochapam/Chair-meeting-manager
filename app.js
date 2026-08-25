@@ -42,8 +42,24 @@ function loadState() {
   }
 }
 
+let storageWarned = false;
+
 function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    storageWarned = false;
+  } catch (e) {
+    // Out of quota (or storage blocked). Silently doing nothing here meant
+    // every later edit was lost without a word — say it once, loudly.
+    if (!storageWarned) {
+      storageWarned = true;
+      showToast({
+        kind: "warning",
+        message: "Couldn't save — this browser's storage is full. Export or file older meetings from History to free space.",
+        duration: 10000,
+      });
+    }
+  }
 }
 
 function markSeen(ts) {
@@ -134,8 +150,6 @@ function newSection(name, minutes) {
     pausedAccum: 0, // seconds already elapsed before the current run
     actualSeconds: null, // filled in once the section is done
     notes: "",
-    wasExtended: false,
-    wasShrunk: false,
     autoReclaimed: 0, // seconds already pulled from upcoming sections due to running overtime
   };
 }
@@ -304,7 +318,6 @@ function shrinkUpcomingSections(neededSeconds) {
       const maxReducible = s.plannedSeconds - MIN_SECTION_SECONDS;
       const reduce = Math.min(share, maxReducible);
       s.plannedSeconds -= reduce;
-      if (reduce > 0.5) s.wasShrunk = true;
       distributed += reduce;
     }
     remaining -= distributed;
@@ -318,7 +331,6 @@ function extendCurrentSection(minutes) {
   if (!sec) return;
   const addSeconds = minutes * 60;
   sec.plannedSeconds += addSeconds;
-  sec.wasExtended = true;
   shrinkUpcomingSections(addSeconds);
   save();
   renderLive();
@@ -329,7 +341,7 @@ function deferSection(id) {
   const idx = m.sections.findIndex(s => s.id === id);
   if (idx === -1) return;
   const [removed] = m.sections.splice(idx, 1);
-  m.deferred.push({ id: removed.id, name: removed.name, originalPlannedSeconds: removed.originalPlannedSeconds, deferredAt: Date.now() });
+  m.deferred.push({ id: removed.id, name: removed.name, originalPlannedSeconds: removed.originalPlannedSeconds, deferredAt: Date.now(), fromIndex: idx });
   save();
   renderLive();
   showToast({ message: `"${removed.name}" deferred to next meeting.` });
@@ -342,7 +354,13 @@ function undoDefer(id) {
   const [d] = m.deferred.splice(idx, 1);
   const restored = newSection(d.name, d.originalPlannedSeconds / 60);
   restored.id = d.id;
-  m.sections.push(restored);
+  // Put it back where it was rather than at the end, but never ahead of
+  // the item currently running.
+  const at = Math.min(
+    m.sections.length,
+    Math.max(m.currentIndex + 1, d.fromIndex ?? m.sections.length),
+  );
+  m.sections.splice(at, 0, restored);
   save();
   renderLive();
 }
@@ -433,7 +451,10 @@ function goToNextSection() {
   const next = m.sections[nextIndex];
   next.status = "current";
   next.startedAt = Date.now();
-  next.pausedAccum = 0;
+  // Don't zero this: an item stepped away from with Previous has banked
+  // time, and coming forward again should resume it, not restart it. A
+  // genuinely fresh item is already at 0.
+  next.pausedAccum = next.pausedAccum || 0;
   m.timerStatus = "running";
   save();
   render();
@@ -460,9 +481,15 @@ function goToPreviousSection() {
   if (!m || m.currentIndex <= 0) return;
   const sec = currentSection();
   if (!sec) return;
+  // Keep whatever time this item has already banked. Zeroing it meant a
+  // mis-click on Previous silently threw away the elapsed time of the item
+  // you were on; stepping forward again now resumes where it left off.
+  // Read the elapsed time before touching status — elapsedSeconds() only
+  // counts the running portion while the section is still "current".
+  const banked = elapsedSeconds(sec);
   sec.status = "upcoming";
+  sec.pausedAccum = banked;
   sec.startedAt = null;
-  sec.pausedAccum = 0;
   sec.actualSeconds = null;
 
   const prevIndex = m.currentIndex - 1;
@@ -471,8 +498,10 @@ function goToPreviousSection() {
   prev.status = "current";
   prev.pausedAccum = prev.actualSeconds || 0;
   prev.actualSeconds = null;
-  prev.startedAt = Date.now();
-  m.timerStatus = "running";
+  // Stay paused if we were paused — stepping back shouldn't start a clock
+  // the chair had deliberately stopped.
+  if (m.timerStatus === "running") prev.startedAt = Date.now();
+  else prev.startedAt = null;
   save();
   render();
 }
@@ -963,6 +992,16 @@ function renderSetup() {
 
   const list = el("div", { id: "section-list" });
   renderSectionRows(list);
+  // Attached here, not in renderSectionRows — that runs again on every add,
+  // delete and suggestion, and each call used to stack another handler on
+  // the same element. Re-render on drop so the item numbers renumber.
+  enableDragReorder(list, ".section-row", (orderedIds) => {
+    const byId = new Map(m.sections.map(sec => [sec.id, sec]));
+    m.sections = orderedIds.map(id => byId.get(id)).filter(Boolean);
+    save();
+    renderSectionRows(list);
+    refreshAgendaTotals();
+  });
   main.appendChild(list);
 
   const addRow = el("div", { class: "row", style: "margin-top:10px;gap:12px" });
@@ -1101,8 +1140,6 @@ function resetMeeting() {
     s.pausedAccum = 0;
     s.actualSeconds = null;
     s.notes = "";
-    s.wasExtended = false;
-    s.wasShrunk = false;
     s.autoReclaimed = 0;
     s.plannedSeconds = s.originalPlannedSeconds;
   }
@@ -1204,12 +1241,6 @@ function renderSectionRows(list) {
     row.appendChild(delBtn);
     list.appendChild(row);
   });
-
-  enableDragReorder(list, ".section-row", (orderedIds) => {
-    const byId = new Map(m.sections.map(sec => [sec.id, sec]));
-    m.sections = orderedIds.map(id => byId.get(id));
-    save();
-  });
 }
 
 /* ---------- LIVE VIEW (cockpit) ---------- */
@@ -1221,11 +1252,6 @@ function computeLiveStats() {
   const elapsed = elapsedSeconds(sec);
   const remaining = sec.plannedSeconds - elapsed;
   const pct = Math.min(100, Math.max(0, (elapsed / sec.plannedSeconds) * 100));
-  const totalElapsedSoFar = m.sections.reduce((s, x) => {
-    if (x.status === "done") return s + x.actualSeconds;
-    if (x.status === "current") return s + elapsedSeconds(x);
-    return s;
-  }, 0);
   // The current section's contribution is floored at 0: once it's run past
   // its budget, auto-reclaim has already shrunk upcoming sections to absorb
   // that overrun (or, agenda exhausted, there's nothing left to shrink) —
@@ -1237,8 +1263,7 @@ function computeLiveStats() {
     return s + x.plannedSeconds;
   }, 0);
   const projectedEndTs = Date.now() + Math.max(0, projectedRemainingTotal) * 1000;
-  const originalEndTs = (m.createdAt || Date.now()) + m.sections.reduce((s, x) => s + x.originalPlannedSeconds, 0) * 1000;
-  return { sec, elapsed, remaining, pct, totalElapsedSoFar, projectedEndTs, originalEndTs };
+  return { sec, elapsed, remaining, pct, projectedEndTs };
 }
 
 function renderLive() {
@@ -1673,7 +1698,6 @@ function startTick() {
       if (toReclaim > 0.5) {
         shrinkUpcomingSections(toReclaim);
         sec.autoReclaimed = alreadyReclaimed + toReclaim;
-        sec.wasExtended = true;
         save();
         reclaimHappened = true;
       }
@@ -1962,6 +1986,26 @@ function renderMinutes() {
 
 /* ---------- HISTORY VIEW ---------- */
 
+// Wraps each occurrence of `query` in a <mark>, building real text nodes
+// rather than an HTML string. Notes and titles are arbitrary user text —
+// concatenating them into innerHTML let a stray "<" mangle the results and
+// let a title containing a tag execute.
+function highlightedSnippet(snippet, query) {
+  const frag = document.createDocumentFragment();
+  if (!query) { frag.appendChild(document.createTextNode(snippet)); return frag; }
+  const hay = snippet.toLowerCase();
+  let from = 0;
+  for (;;) {
+    const at = hay.indexOf(query, from);
+    if (at === -1) break;
+    if (at > from) frag.appendChild(document.createTextNode(snippet.slice(from, at)));
+    frag.appendChild(el("mark", null, snippet.slice(at, at + query.length)));
+    from = at + query.length;
+  }
+  frag.appendChild(document.createTextNode(snippet.slice(from)));
+  return frag;
+}
+
 function renderHistory() {
   clearTick();
   app.innerHTML = "";
@@ -1990,13 +2034,15 @@ function renderHistory() {
     if (!q) return;
     const matches = [];
     for (const m of state.history) {
+      // Keep the original casing for display and match case-insensitively
+      // separately, so results read the way they were typed.
       const hay = [
         m.title,
         ...(m.captures || []).map(c => c.text),
         ...m.sections.map(s => s.notes),
         m.generalNotes,
-      ].join(" \n ").toLowerCase();
-      const idx = hay.indexOf(q);
+      ].filter(Boolean).join(" \n ");
+      const idx = hay.toLowerCase().indexOf(q);
       if (idx !== -1) {
         const snippet = hay.slice(Math.max(0, idx - 30), idx + q.length + 30).trim();
         matches.push({ m, snippet });
@@ -2007,9 +2053,12 @@ function renderHistory() {
       return;
     }
     matches.forEach(({ m, snippet }) => {
-      const row = el("div", { class: "search-match" });
-      const highlighted = snippet.replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig"), (match) => `<mark>${match}</mark>`);
-      row.innerHTML = `<strong>${m.title || "Untitled Meeting"}</strong> — …${highlighted}…`;
+      const row = el("div", { class: "search-match" }, [
+        el("strong", null, m.title || "Untitled Meeting"),
+        " — …",
+        highlightedSnippet(snippet, q),
+        "… ",
+      ]);
       resultsEl.appendChild(row);
     });
   });
