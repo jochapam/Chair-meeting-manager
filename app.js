@@ -422,6 +422,19 @@ function goToNextSection() {
   render();
 }
 
+// The play button on any upcoming item: moves that item to the front of
+// the queue (right after whatever's current) and starts it immediately.
+// Items it jumps over aren't lost — they just now run after it.
+function jumpToSection(id) {
+  const m = state.meeting;
+  if (!m) return;
+  const idx = m.sections.findIndex(s => s.id === id);
+  if (idx === -1 || m.sections[idx].status !== "upcoming") return;
+  const [sec] = m.sections.splice(idx, 1);
+  m.sections.splice(m.currentIndex + 1, 0, sec);
+  goToNextSection();
+}
+
 // Steps back to the previous item: puts the current one back to upcoming
 // (untimed, as if it hadn't started), and resumes the previous item's
 // clock from exactly where it left off rather than restarting it.
@@ -1277,11 +1290,9 @@ function renderLive() {
     info.appendChild(metaEl);
     if (s.status === "upcoming") {
       const actionsEl = el("div", { class: "rail-actions" });
-      if (isNextUp) {
-        const goBtn = el("button", { class: "icon-btn go-next", title: "Go to this item now" }, "▶");
-        goBtn.addEventListener("click", (e) => { e.stopPropagation(); goToNextSection(); });
-        actionsEl.appendChild(goBtn);
-      }
+      const goBtn = el("button", { class: "icon-btn go-next", title: "Jump to this item now" }, "▶");
+      goBtn.addEventListener("click", (e) => { e.stopPropagation(); jumpToSection(s.id); });
+      actionsEl.appendChild(goBtn);
       const deferBtn = el("button", { class: "icon-btn", title: "Defer to next meeting" }, "✕");
       deferBtn.addEventListener("click", (e) => { e.stopPropagation(); deferSection(s.id); });
       actionsEl.appendChild(deferBtn);
