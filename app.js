@@ -1188,6 +1188,7 @@ function renderLive() {
     el("h2", null, sec.name),
   ]));
 
+  const statusZone = el("div", { class: "item-bar-status" });
   const itemBarTop = el("div", { class: "item-bar-top" });
   const statsGroup = el("div", { class: "item-bar-stats" });
 
@@ -1229,13 +1230,13 @@ function renderLive() {
   heroActions.appendChild(breakBtn);
   heroActions.appendChild(topEndBtn);
   itemBarTop.appendChild(heroActions);
-
-  currentItemBar.appendChild(itemBarTop);
+  statusZone.appendChild(itemBarTop);
 
   const track = el("div", { class: "progress-track" });
   const fillEl = el("div", { id: "progress-fill", class: "progress-fill" + (isOvertime ? " overtime" : ""), style: `width:${pct}%` });
   track.appendChild(fillEl);
-  currentItemBar.appendChild(track);
+  statusZone.appendChild(track);
+  currentItemBar.appendChild(statusZone);
 
   // Decision/Action/Motion move to the footer row below the notes, next to
   // Reset/End Meeting — they're about filing a note, not about the item
