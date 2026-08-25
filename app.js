@@ -1152,9 +1152,14 @@ function computeLiveStats() {
     if (x.status === "current") return s + elapsedSeconds(x);
     return s;
   }, 0);
+  // The current section's contribution is floored at 0: once it's run past
+  // its budget, auto-reclaim has already shrunk upcoming sections to absorb
+  // that overrun (or, agenda exhausted, there's nothing left to shrink) —
+  // either way, letting this go negative would subtract the overrun a
+  // second time on top of that, projecting an end time earlier than real.
   const projectedRemainingTotal = m.sections.reduce((s, x) => {
     if (x.status === "done") return s;
-    if (x.status === "current") return s + (x.plannedSeconds - elapsedSeconds(x));
+    if (x.status === "current") return s + Math.max(0, x.plannedSeconds - elapsedSeconds(x));
     return s + x.plannedSeconds;
   }, 0);
   const projectedEndTs = Date.now() + Math.max(0, projectedRemainingTotal) * 1000;
