@@ -1192,6 +1192,12 @@ function renderLive() {
   const itemBarTop = el("div", { class: "item-bar-top" });
   const statsGroup = el("div", { class: "item-bar-stats" });
 
+  const itemTimerBlock = el("div", { class: "item-timer-block" });
+  const remainValueClass = isOvertime ? "item-timer-value overtime" : (pct > 85 ? "item-timer-value warn" : "item-timer-value");
+  const remainValueEl = el("div", { id: "timer-display", class: remainValueClass }, fmtClock(remaining));
+  itemTimerBlock.appendChild(remainValueEl);
+  statsGroup.appendChild(itemTimerBlock);
+
   const planStat = el("div", { class: "hero-stat" });
   planStat.appendChild(el("div", { class: "hero-label" }, "Against plan"));
   const badgeInfo0 = scheduleBadgeInfo();
@@ -1205,11 +1211,6 @@ function renderLive() {
   endStat.appendChild(projectedEndEl);
   statsGroup.appendChild(endStat);
 
-  const itemTimerBlock = el("div", { class: "item-timer-block" });
-  const remainValueClass = isOvertime ? "item-timer-value overtime" : (pct > 85 ? "item-timer-value warn" : "item-timer-value");
-  const remainValueEl = el("div", { id: "timer-display", class: remainValueClass }, fmtClock(remaining));
-  itemTimerBlock.appendChild(remainValueEl);
-  statsGroup.appendChild(itemTimerBlock);
   itemBarTop.appendChild(statsGroup);
 
   const heroActions = el("div", { class: "hero-actions" });
