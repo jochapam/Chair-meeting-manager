@@ -1,0 +1,13 @@
+{
+  "name": "chair-meeting-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agenda timer, live notes and minutes for chairing meetings. The app itself is dependency-free static HTML/CSS/JS — these dev dependencies exist only to run the regression tests.",
+  "scripts": {
+    "serve": "python3 -m http.server 8123",
+    "test": "node tests/regression.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}
