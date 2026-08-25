@@ -1189,7 +1189,6 @@ function renderLive() {
   const itemBarTop = el("div", { class: "item-bar-top" });
   itemBarTop.appendChild(el("div", { class: "notes-header" }, [
     el("h2", null, sec.name),
-    el("div", { class: "notes-meta" }, `${m.currentIndex + 1}/${m.sections.length} · ${fmtMinutes(sec.plannedSeconds)}`),
   ]));
 
   const itemTimerBlock = el("div", { class: "item-timer-block" });

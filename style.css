@@ -946,14 +946,6 @@ table.minutes-table th {
 .cockpit-notes { display: flex; flex-direction: column; background: var(--bg); min-width: 0; }
 .notes-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
 .notes-header h2 { font-size: 1.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.notes-header .notes-meta {
-  font-family: "Archivo Narrow", sans-serif;
-  font-size: 0.66rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
 /* The item's own countdown — sized to match its importance: it's the
    number a chair actually watches most while an item is running. */
 .item-timer-block { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
