@@ -15,6 +15,10 @@ const IDLE_GAP_SECONDS = 120;
 
 /* ---------- state ---------- */
 
+// Set by loadState() when it repairs an older saved shape. The repair is
+// written back in the boot block at the bottom of this file — save() reads
+// module state declared further down, so it can't run this early.
+let migratedLegacy = false;
 let state = loadState();
 let tickHandle = null;
 let liveRefs = null; // DOM references for surgical per-second updates on the live view
@@ -36,10 +40,58 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultState();
     const parsed = JSON.parse(raw);
-    return Object.assign(defaultState(), parsed);
+    const loaded = Object.assign(defaultState(), parsed);
+    migratedLegacy = migrateLegacyCaptures(loaded);
+    return loaded;
   } catch (e) {
     return defaultState();
   }
+}
+
+// Older meetings kept decisions and action items in two places: m.captures
+// (which records the agenda item each belongs to) and flat m.decisions /
+// m.actionItems arrays (which don't). Anything typed into the manual "add
+// a decision" forms on the old minutes screen landed *only* in the flat
+// arrays. Now that everything reads from m.captures, those entries would
+// simply vanish from an old meeting — so fold them across on load.
+//
+// Matching on text alone is deliberate: the same wording filed twice is
+// far likelier to be one item recorded two ways than two genuine entries.
+function migrateLegacyCaptures(s) {
+  let changed = false;
+  const meetings = [s.meeting, ...(s.history || [])].filter(Boolean);
+  for (const m of meetings) {
+    if (!Array.isArray(m.captures)) m.captures = [];
+    const seen = new Set(m.captures.map(c => `${c.kind}|${(c.text || "").trim()}`));
+
+    const adopt = (kind, text, owner) => {
+      const clean = (text || "").trim();
+      if (!clean) return;
+      const key = `${kind}|${clean}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      m.captures.push({
+        id: uid(),
+        kind,
+        text: clean,
+        owner: owner || "",
+        // Genuinely unknown — these were never recorded against an item.
+        sectionName: "",
+        timestamp: m.createdAt || Date.now(),
+      });
+      changed = true;
+    };
+
+    for (const d of m.decisions || []) adopt("decision", typeof d === "string" ? d : d && d.text);
+    for (const a of m.actionItems || []) adopt("action", a && a.text, a && a.owner);
+
+    if ("decisions" in m || "actionItems" in m) {
+      delete m.decisions;
+      delete m.actionItems;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 let storageWarned = false;
@@ -600,7 +652,7 @@ function buildMinutesMarkdown(m) {
   if (decisions.length) {
     lines.push("## Decisions");
     lines.push("");
-    for (const d of decisions) lines.push(`- ${d.text} _(${d.sectionName})_`);
+    for (const d of decisions) lines.push(`- ${d.text}${d.sectionName ? ` _(${d.sectionName})_` : ""}`);
     lines.push("");
   }
 
@@ -609,7 +661,7 @@ function buildMinutesMarkdown(m) {
     lines.push("## Action Items");
     lines.push("");
     for (const a of actionItems) {
-      lines.push(`- [ ] ${a.text}${a.owner ? ` (Owner: ${a.owner})` : ""} _(${a.sectionName})_`);
+      lines.push(`- [ ] ${a.text}${a.owner ? ` (Owner: ${a.owner})` : ""}${a.sectionName ? ` _(${a.sectionName})_` : ""}`);
     }
     lines.push("");
   }
@@ -618,7 +670,7 @@ function buildMinutesMarkdown(m) {
   if (motions.length) {
     lines.push("## Motions");
     lines.push("");
-    for (const mo of motions) lines.push(`- ${mo.text} _(${mo.sectionName})_`);
+    for (const mo of motions) lines.push(`- ${mo.text}${mo.sectionName ? ` _(${mo.sectionName})_` : ""}`);
     lines.push("");
   }
 
@@ -1564,7 +1616,7 @@ function renderCapturesList(listEl) {
       el("span", { class: "capture-time" }, fmtTimeOfDay(c.timestamp)),
     ]));
     item.appendChild(el("div", { class: "capture-text" }, [c.text, c.owner ? el("span", { class: "capture-owner" }, "@" + c.owner) : null]));
-    item.appendChild(el("div", { class: "capture-section" }, c.sectionName));
+    if (c.sectionName) item.appendChild(el("div", { class: "capture-section" }, c.sectionName));
     listEl.appendChild(item);
   }
 }
@@ -1798,6 +1850,13 @@ document.addEventListener("keydown", (e) => {
 
 /* ---------- MINUTES VIEW ---------- */
 
+// The agenda item a capture belongs to. Migrated legacy entries genuinely
+// don't have one, so show nothing rather than an empty gap.
+function sectionTag(name) {
+  if (!name) return null;
+  return el("span", { class: "stat dim", style: "margin-left:8px" }, name);
+}
+
 function flatSectionLabel(text, value) {
   const row = el("div", { class: "section-label-row" }, [
     el("span", { class: "section-label" }, text),
@@ -1916,7 +1975,7 @@ function renderMinutes() {
     app.appendChild(flatSectionLabel("Decisions"));
     decisions.forEach(d => {
       const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, [d.text, el("span", { class: "stat dim", style: "margin-left:8px" }, d.sectionName)]));
+      row.appendChild(el("div", { class: "name" }, [d.text, sectionTag(d.sectionName)]));
       const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
       rm.addEventListener("click", () => removeCaptureRow(d));
       row.appendChild(rm);
@@ -1932,7 +1991,7 @@ function renderMinutes() {
       row.appendChild(el("div", { class: "name" }, [
         a.text,
         a.owner ? el("span", { class: "stat dim", style: "margin-left:8px" }, "@" + a.owner) : null,
-        el("span", { class: "stat dim", style: "margin-left:8px" }, a.sectionName),
+        sectionTag(a.sectionName),
       ]));
       const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
       rm.addEventListener("click", () => removeCaptureRow(a));
@@ -1946,7 +2005,7 @@ function renderMinutes() {
     app.appendChild(flatSectionLabel("Motions"));
     motions.forEach(mo => {
       const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, [mo.text, el("span", { class: "stat dim", style: "margin-left:8px" }, mo.sectionName)]));
+      row.appendChild(el("div", { class: "name" }, [mo.text, sectionTag(mo.sectionName)]));
       const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
       rm.addEventListener("click", () => removeCaptureRow(mo));
       row.appendChild(rm);
@@ -2153,6 +2212,10 @@ if (state.meeting) {
 
 // Reopening after the tab was closed for a while is the same problem as
 // waking from sleep: the clock kept moving but the meeting wasn't running.
+// Persist any legacy-shape repair loadState() made, so it happens once
+// rather than on every load.
+if (migratedLegacy) save();
+
 const seen = lastSeenAt();
 if (state.meeting && seen) absorbIdleGap((Date.now() - seen) / 1000);
 lastTickAt = Date.now();
