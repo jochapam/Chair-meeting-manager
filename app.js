@@ -538,9 +538,13 @@ function buildMinutesMarkdown(m) {
   lines.push(`- **Date:** ${fmtDateTime(m.createdAt)}`);
   if (m.attendees) lines.push(`- **Attendees:** ${m.attendees}`);
   const totalPlanned = m.sections.reduce((s, x) => s + x.originalPlannedSeconds, 0);
-  const totalActual = m.sections.reduce((s, x) => s + (x.actualSeconds ?? x.plannedSeconds), 0);
+  // Only time that was actually spent. Falling back to plannedSeconds here
+  // counted items that never ran as though they had, so ending a meeting
+  // early reported far more time than the meeting took.
+  const totalActual = m.sections.reduce((s, x) => s + (x.actualSeconds ?? 0), 0);
+  const unrun = m.sections.filter(x => x.actualSeconds == null).length;
   lines.push(`- **Planned duration:** ${fmtMinutes(totalPlanned)}`);
-  lines.push(`- **Actual duration:** ${fmtMinutes(totalActual)}`);
+  lines.push(`- **Actual duration:** ${fmtMinutes(totalActual)}${unrun ? ` (${unrun} item${unrun === 1 ? "" : "s"} not reached)` : ""}`);
   if (m.breaks && m.breaks.length) {
     lines.push(`- **Breaks:** ${m.breaks.length} (${fmtMinutes(breakTotalSeconds(m))} total)`);
   }
@@ -1801,9 +1805,20 @@ function renderMinutes() {
   exportBtn.addEventListener("click", () => downloadMarkdown(m));
   const printBtn = el("button", { class: "btn" }, "Print");
   printBtn.addEventListener("click", () => window.print());
-  const fileBtn = el("button", { class: "btn btn-primary" }, "File Meeting");
+  // Viewing a filed meeting from History points state.meeting straight at
+  // the history entry, so this screen is reached in two different modes.
+  // Offering "File Meeting" in both filed a second copy of something
+  // already in History; now an already-filed meeting gets a way back out
+  // instead.
+  const alreadyFiled = isFiled(m);
+  const fileBtn = el("button", { class: "btn btn-primary" }, alreadyFiled ? "Back to History" : "File Meeting");
   fileBtn.addEventListener("click", () => {
-    state.history.unshift(JSON.parse(JSON.stringify(m)));
+    if (alreadyFiled) {
+      state.meeting = null;
+      switchView("history");
+      return;
+    }
+    fileMeeting(m);
     state.meeting = null;
     state.view = "setup";
     save();
