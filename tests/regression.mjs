@@ -11,7 +11,7 @@
 import { chromium } from "playwright";
 import {
   startServer, Failure, assert, assertEqual,
-  openApp, startMeeting, endMeeting, typeNote, clickNav,
+  openApp, startMeeting, endMeeting, typeNote, clickNav, gotoApp, stubWebFonts,
   readState, breakLine,
 } from "./harness.mjs";
 
@@ -135,7 +135,7 @@ test("reopening the tab after a long absence also pauses rather than charging th
   await page.clock.runFor(2000); // let one tick record lastSeenAt
 
   await page.clock.setSystemTime(new Date("2026-01-02T08:00:00"));
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("#timer-display");
 
   const { meeting } = await readState(page);
@@ -338,9 +338,9 @@ test("decisions and actions stored only in the old flat arrays are not lost", as
     }],
   };
 
-  await page.goto(origin);
+  await gotoApp(page, origin);
   await page.evaluate(s => localStorage.setItem("chair-meeting-manager:v1", JSON.stringify(s)), legacy);
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("text=Where the time goes");
 
   const kinds = (await readState(page)).history[0].captures;
@@ -386,9 +386,9 @@ test("repeated wording in an old meeting is kept, not collapsed into one", async
     }],
   };
 
-  await page.goto(origin);
+  await gotoApp(page, origin);
   await page.evaluate(s => localStorage.setItem("chair-meeting-manager:v1", JSON.stringify(s)), legacy);
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("text=Where the time goes");
 
   const caps = (await readState(page)).history[0].captures;
@@ -403,6 +403,112 @@ test("repeated wording in an old meeting is kept, not collapsed into one", async
     caps.filter(c => c.sectionName === "3.1 Strategic goals").length, 1,
     "the properly-recorded entry keeps its agenda item and isn't duplicated",
   );
+});
+
+/* =====================================================================
+   The exported minutes read as a document someone can be held to
+   ===================================================================== */
+
+/** A finished meeting with known timings, seeded straight into storage. */
+async function seedFinished(page, origin, { sections, captures = [], orderChanged = false }) {
+  const state = {
+    view: "minutes", savedAgendas: [], history: [],
+    meeting: {
+      id: "m1", title: "Board", attendees: "",
+      createdAt: Date.parse("2026-01-05T09:00:00"), endedAt: Date.parse("2026-01-05T11:00:00"),
+      currentIndex: sections.length - 1, timerStatus: "ended", generalNotes: "",
+      breaks: [], deferred: [], orderChanged, captures,
+      sections: sections.map(([name, planMin, actualSec], i) => ({
+        id: "s" + i, name, plannedSeconds: planMin * 60, originalPlannedSeconds: planMin * 60,
+        status: "done", startedAt: null, pausedAccum: 0, actualSeconds: actualSec,
+        notes: "", autoReclaimed: 0,
+      })),
+    },
+  };
+  await gotoApp(page, origin);
+  await page.evaluate(s => localStorage.setItem("chair-meeting-manager:v1", JSON.stringify(s)), state);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".page-head");
+  return page.evaluate(() =>
+    buildMinutesMarkdown(JSON.parse(localStorage.getItem("chair-meeting-manager:v1")).meeting));
+}
+
+test("the timing table totals, and the quoted totals match it", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [["Opening", 1, 13 * 60], ["Budget", 10, 4 * 60], ["Close", 5, 2 * 60]],
+  });
+  const totalRow = md.split("\n").find(l => l.startsWith("| **Total"));
+  assert(totalRow, `the table needs a total row:\n${md}`);
+  assert(totalRow.includes("**16 min**"), `planned total should be 16 min, got: ${totalRow}`);
+  assert(totalRow.includes("**19 min**"), `actual total should be 19 min, got: ${totalRow}`);
+  // And the figures quoted above the table agree with that row.
+  assert(md.includes("**Planned duration:** 16 min"), "quoted planned duration should match the table");
+  assert(md.includes("**Actual duration:** 19 min"), "quoted actual duration should match the table");
+});
+
+test("an item dealt with in seconds reads as under a minute, not as nothing", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [["Quickly noted", 1, 20], ["Discussed", 10, 9 * 60]],
+  });
+  const row = md.split("\n").find(l => l.startsWith("| Quickly noted"));
+  assert(row.includes("<1 min"), `a 20-second item must not read as "0 min": ${row}`);
+  assert(md.includes("1 item took under a minute"), "the export should explain the rounding");
+  // The header total still tells the truth about the time spent.
+  assert(md.includes("**Actual duration:** 9 min"), `header total should stay exact:\n${md}`);
+});
+
+test("the timing table shows variance so overruns are visible", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [["Ran over", 10, 26 * 60], ["Ran under", 10, 4 * 60], ["Bang on", 5, 5 * 60]],
+  });
+  assert(md.includes("| Item | Planned | Actual | Variance |"), "the table needs a variance column");
+  const row = name => md.split("\n").find(l => l.startsWith(`| ${name}`));
+  assert(row("Ran over").endsWith("| +16 |"), `overrun should read +16: ${row("Ran over")}`);
+  assert(row("Ran under").endsWith("| −6 |"), `under should read −6: ${row("Ran under")}`);
+  assert(row("Bang on").endsWith("| 0 |"), `on-plan should read 0: ${row("Bang on")}`);
+});
+
+test("out-of-order items are only flagged when the order actually changed", async (page, origin) => {
+  const asRun = { sections: [["4.5 Later item", 5, 60], ["4.4 Earlier item", 5, 60]] };
+  const plain = await seedFinished(page, origin, asRun);
+  assert(!plain.includes("order the items were taken"),
+    "an agenda simply drafted in that order must not be labelled as re-ordered");
+
+  const jumped = await seedFinished(page, origin, { ...asRun, orderChanged: true });
+  assert(jumped.includes("order the items were taken"),
+    "an agenda actually re-ordered on the day should say so");
+});
+
+test("a motion reads as a resolution about its agenda item", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [["4.1 AI Usage Policy", 5, 60]],
+    captures: [
+      { id: "mo1", kind: "motion", text: "approved", owner: "", sectionName: "4.1 AI Usage Policy",
+        timestamp: Date.now(), moved: "Mel", seconded: "Andrew" },
+      { id: "mo2", kind: "motion", text: "noted", owner: "", sectionName: "4.1 AI Usage Policy",
+        timestamp: Date.now() },
+    ],
+  });
+  assert(
+    md.includes("- **4.1 AI Usage Policy** — approved. Moved: Mel. Seconded: Andrew"),
+    `the item should lead and the parties be named:\n${md.split("## Motions")[1]}`,
+  );
+  assert(
+    md.includes("- **4.1 AI Usage Policy** — noted"),
+    "a motion without a mover should still lead with its item",
+  );
+});
+
+test("moved: and seconded: are lifted off the motion text when filed live", async (page, origin) => {
+  await openApp(page, origin, { items: ["4.1 AI Usage Policy"] });
+  await startMeeting(page);
+  await typeNote(page, "/motion approved moved:Mel seconded:Andrew\n");
+
+  const [motion] = (await readState(page)).meeting.captures.filter(c => c.kind === "motion");
+  assertEqual(motion.text, "approved", "the parties should not be left in the resolution text");
+  assertEqual(motion.moved, "Mel", "mover recorded");
+  assertEqual(motion.seconded, "Andrew", "seconder recorded");
+  assertEqual(motion.sectionName, "4.1 AI Usage Policy", "still filed against the item");
 });
 
 /* =====================================================================
@@ -430,6 +536,7 @@ const failures = [];
 for (const { name, fn } of tests) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(15000);
+  await stubWebFonts(page);
   const pageErrors = [];
   page.on("pageerror", err => pageErrors.push(err.message));
   try {

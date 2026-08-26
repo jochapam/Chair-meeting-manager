@@ -155,6 +155,22 @@ function fmtMinutes(totalSeconds) {
   return `${m} min`;
 }
 
+// For a single row of the timing table. An item dealt with in twenty
+// seconds rounds to "0 min", which in a formal record can't be told apart
+// from one that was skipped — so anything under half a minute is reported
+// as under a minute rather than as nothing.
+function fmtMinutesRow(totalSeconds) {
+  if (totalSeconds > 0 && Math.round(totalSeconds / 60) === 0) return "<1 min";
+  return fmtMinutes(totalSeconds);
+}
+
+// Signed difference in whole minutes, e.g. "+13" / "−6" / "0".
+function fmtVariance(deltaSeconds) {
+  const mins = Math.round(deltaSeconds / 60);
+  if (mins === 0) return "0";
+  return (mins > 0 ? "+" : "−") + Math.abs(mins);
+}
+
 function fmtDateTime(ts) {
   if (!ts) return "";
   const d = new Date(ts);
@@ -428,11 +444,14 @@ function undoDefer(id) {
 
 /* ---------- notes that file themselves ---------- */
 
-function fileCapture(kind, text, owner) {
+function fileCapture(kind, text, owner, extra) {
   const m = state.meeting;
   const sec = currentSection();
   if (!sec) return;
-  m.captures.push({ id: uid(), kind, text, owner: owner || "", sectionName: sec.name, timestamp: Date.now() });
+  m.captures.push(Object.assign(
+    { id: uid(), kind, text, owner: owner || "", sectionName: sec.name, timestamp: Date.now() },
+    extra || {},
+  ));
   save();
   updateCapturesPanel();
 }
@@ -440,6 +459,27 @@ function fileCapture(kind, text, owner) {
 function extractOwner(text) {
   const m = text.match(/@(\S+)/);
   return m ? m[1] : null;
+}
+
+// Most constitutions want a mover and a seconder on the record. Written as
+// "moved:Mel seconded:Andrew" anywhere in the motion line; both optional,
+// and stripped from the resolution text itself.
+// "Approved" on its own records nothing: the agenda item is the subject of
+// the resolution, so it has to lead rather than trail in brackets.
+function motionParts(mo) {
+  const parties = [];
+  if (mo.moved) parties.push(`Moved: ${mo.moved}`);
+  if (mo.seconded) parties.push(`Seconded: ${mo.seconded}`);
+  return { item: mo.sectionName || "", outcome: (mo.text || "").trim(), parties: parties.join(". ") };
+}
+
+function extractMotionParties(text) {
+  let moved = null;
+  let seconded = null;
+  let rest = text
+    .replace(/\bmoved\s*:\s*@?([^\s,;]+)/i, (_, n) => { moved = n; return " "; })
+    .replace(/\bseconded\s*:\s*@?([^\s,;]+)/i, (_, n) => { seconded = n; return " "; });
+  return { moved, seconded, text: rest.replace(/\s{2,}/g, " ").trim() };
 }
 
 /* ---------- timer controls ---------- */
@@ -531,6 +571,7 @@ function jumpToSection(id) {
   if (idx === -1 || m.sections[idx].status !== "upcoming") return;
   const [sec] = m.sections.splice(idx, 1);
   m.sections.splice(m.currentIndex + 1, 0, sec);
+  m.orderChanged = true;
   goToNextSection();
 }
 
@@ -642,13 +683,34 @@ function buildMinutesMarkdown(m) {
 
   lines.push("## Agenda & Timing");
   lines.push("");
-  lines.push("| Section | Planned | Actual |");
-  lines.push("|---|---|---|");
-  for (const s of m.sections) {
-    const actual = s.actualSeconds != null ? fmtMinutes(s.actualSeconds) : "—";
-    lines.push(`| ${s.name} | ${fmtMinutes(s.originalPlannedSeconds)} | ${actual} |`);
+  // Only claim this when the running order actually departed from the
+  // prepared one — recorded at the moment it happens, since item names
+  // aren't reliably numbered and can't be re-derived here.
+  if (m.orderChanged) {
+    lines.push("_Listed in the order the items were taken, which differed from the agenda._");
+    lines.push("");
   }
+  lines.push("| Item | Planned | Actual | Variance |");
+  lines.push("|---|---|---|---|");
+  for (const s of m.sections) {
+    const ran = s.actualSeconds != null;
+    const actual = ran ? fmtMinutesRow(s.actualSeconds) : "—";
+    const variance = ran ? fmtVariance(s.actualSeconds - s.originalPlannedSeconds) : "—";
+    lines.push(`| ${s.name} | ${fmtMinutesRow(s.originalPlannedSeconds)} | ${actual} | ${variance} |`);
+  }
+  // A total row, so the figures quoted above the table can be checked
+  // against it. Both come from the same unrounded seconds — without this
+  // a reader adding the column would land a few minutes off, because each
+  // row is rounded on its own.
+  lines.push(`| **Total** | **${fmtMinutes(totalPlanned)}** | **${fmtMinutes(totalActual)}** | **${fmtVariance(totalActual - totalPlanned)}** |`);
   lines.push("");
+  // Say plainly why the column need not add up to the total, rather than
+  // leaving a reader to wonder whether the figures are wrong.
+  const briefItems = m.sections.filter(x => x.actualSeconds != null && x.actualSeconds > 0 && Math.round(x.actualSeconds / 60) === 0).length;
+  if (briefItems) {
+    lines.push(`_Each row is rounded to the nearest minute; ${briefItems} item${briefItems === 1 ? "" : "s"} took under a minute. The totals are exact._`);
+    lines.push("");
+  }
 
   if (m.deferred && m.deferred.length) {
     lines.push("## Deferred to Next Meeting");
@@ -679,13 +741,17 @@ function buildMinutesMarkdown(m) {
   if (motions.length) {
     lines.push("## Motions");
     lines.push("");
-    for (const mo of motions) lines.push(`- ${mo.text}${mo.sectionName ? ` _(${mo.sectionName})_` : ""}`);
+    for (const mo of motions) {
+      const p = motionParts(mo);
+      const head = p.item ? `**${p.item}** — ${p.outcome}` : p.outcome;
+      lines.push(`- ${head}${p.parties ? `. ${p.parties}` : ""}`);
+    }
     lines.push("");
   }
 
   const notedSections = m.sections.filter(s => s.notes && s.notes.trim());
   if (notedSections.length) {
-    lines.push("## Section Notes");
+    lines.push("## Notes by Item");
     lines.push("");
     for (const s of notedSections) {
       lines.push(`### ${s.name}`);
@@ -1192,6 +1258,7 @@ function resetMeeting() {
   m.createdAt = null;
   m.endedAt = null;
   m.breaks = [];
+  m.orderChanged = false;
   m.captures = [];
   m.deferred = [];
   m.generalNotes = "";
@@ -1502,13 +1569,14 @@ function renderLive() {
     const firstUpcomingIdx = m.currentIndex + 1;
     const reordered = orderedIds.map(id => byId.get(id));
     m.sections.splice(firstUpcomingIdx, reordered.length, ...reordered);
+    m.orderChanged = true;
     save();
     renderLive();
   });
 
   const notes = el("main", { class: "cockpit-notes" });
 
-  const notesArea = el("textarea", { placeholder: "Capture points, decisions, or follow-ups. Start a line with /decision, /action or /motion to file it — @Name assigns an owner." });
+  const notesArea = el("textarea", { placeholder: "Capture points, decisions, or follow-ups. Start a line with /decision, /action or /motion to file it — @Name assigns an owner, and a motion takes moved:Name seconded:Name." });
   notesArea.value = sec.notes;
   notesArea.addEventListener("input", (e) => { sec.notes = e.target.value; save(); });
   notesArea.addEventListener("keydown", onNotesKeydown);
@@ -1594,7 +1662,16 @@ function onNotesKeydown(e) {
   const text = match[2].trim();
   if (!text) return;
   const owner = extractOwner(text);
-  const cleanText = text.replace(/@\S+\s*/, "").trim();
+  let cleanText = text.replace(/@\S+\s*/, "").trim();
+  let extra = null;
+  if (kind === "motion") {
+    const parties = extractMotionParties(cleanText);
+    cleanText = parties.text;
+    if (parties.moved || parties.seconded) {
+      extra = { moved: parties.moved || "", seconded: parties.seconded || "" };
+    }
+  }
+  if (!cleanText) return;
   e.preventDefault();
   const newValue = ta.value.slice(0, lastNewline + 1) + ta.value.slice(cursorPos);
   ta.value = newValue;
@@ -1602,7 +1679,7 @@ function onNotesKeydown(e) {
   const sec = currentSection();
   if (sec) sec.notes = newValue;
   save();
-  fileCapture(kind, cleanText, owner);
+  fileCapture(kind, cleanText, owner, extra);
 }
 
 function renderCapturesList(listEl) {
@@ -1944,9 +2021,9 @@ function renderMinutes() {
   m.sections.forEach(s => {
     const row = el("div", { class: "flat-row" });
     row.appendChild(el("div", { class: "name" }, s.name));
-    row.appendChild(el("div", { class: "stat dim" }, fmtMinutes(s.originalPlannedSeconds)));
+    row.appendChild(el("div", { class: "stat dim" }, fmtMinutesRow(s.originalPlannedSeconds)));
     if (s.actualSeconds != null) {
-      row.appendChild(el("div", { class: "stat" }, fmtMinutes(s.actualSeconds)));
+      row.appendChild(el("div", { class: "stat" }, fmtMinutesRow(s.actualSeconds)));
       const delta = s.actualSeconds - s.originalPlannedSeconds;
       const deltaText = Math.abs(Math.round(delta / 60)) < 1 ? "0m" : (delta >= 0 ? "+" : "−") + Math.round(Math.abs(delta) / 60) + "m";
       row.appendChild(el("div", { class: `stat delta ${delta < 0 ? "under" : delta > 0 ? "over" : ""}` }, deltaText));
@@ -2014,7 +2091,12 @@ function renderMinutes() {
     app.appendChild(flatSectionLabel("Motions"));
     motions.forEach(mo => {
       const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, [mo.text, sectionTag(mo.sectionName)]));
+      const p = motionParts(mo);
+      row.appendChild(el("div", { class: "name" }, [
+        p.item ? el("strong", null, `${p.item} — `) : null,
+        p.outcome,
+        p.parties ? el("span", { class: "stat dim", style: "margin-left:8px" }, p.parties) : null,
+      ]));
       const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
       rm.addEventListener("click", () => removeCaptureRow(mo));
       row.appendChild(rm);
