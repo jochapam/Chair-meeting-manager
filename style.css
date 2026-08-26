@@ -1047,3 +1047,52 @@ table.minutes-table th {
   resize: none;
   overflow: hidden;
 }
+
+/* ---------- item purpose ("for discussion / feedback / noting") ---------- */
+
+/* The picker on Prepare. Kept to the width of its longest label so a long
+   agenda stays a tidy column, and styled as an underline like every other
+   field on the page rather than as a native control. */
+.purpose-select { flex-shrink: 0; }
+.section-row .purpose-select,
+.row > .purpose-select {
+  flex-shrink: 0;
+  width: 104px;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: none;
+  padding: 4px 2px;
+  font-family: "Archivo Narrow", sans-serif;
+  font-size: 0.78rem;
+  color: var(--text-mid);
+  cursor: pointer;
+}
+.purpose-select:hover { border-bottom-color: var(--line-soft-2); }
+.purpose-select:focus { outline: none; border-bottom-color: var(--accent); }
+
+/* The marker itself, on the live cockpit and in the minutes. One neutral
+   treatment for all three: orange and green stay reserved for the
+   behind/ahead indicator, so a purpose must never compete with them. */
+.purpose-chip {
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border: 1px solid var(--line-soft-2);
+  font-family: "Archivo Narrow", sans-serif;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* An item that is only for noting is the one worth spotting at a glance —
+   it's the one a chair should not let a discussion open on. */
+.purpose-chip.purpose-note { background: var(--surface-3); border-color: transparent; }
+.agenda-item .name .purpose-chip { margin-left: 6px; font-size: 0.55rem; padding: 1px 5px; }
+.section-label-row .purpose-chip { margin-left: 2px; }
+
+/* An item the meeting never reached still gets its line in the agenda, but
+   it is not part of the record — say so quietly. */
+.item-unreached .section-label { color: var(--text-dim); font-weight: 500; }

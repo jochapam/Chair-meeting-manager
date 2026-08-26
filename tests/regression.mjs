@@ -523,7 +523,10 @@ test("everything recorded against an item sits under that one heading", async (p
   assert(block.includes("@mel is it divestment or recycling?"), `notes belong to the item:\n${block}`);
   assert(block.includes("**Decision:** criteria to be drafted"), `decision belongs to the item:\n${block}`);
   assert(block.includes("**Action:** Andrew — to introduce Wayne to ASFI"), `action belongs to the item:\n${block}`);
-  assert(block.includes("_Planned 10 min · Actual 26 min (+16)_"), `the item carries its own timing:\n${block}`);
+  // Timing is stated once, in the table. It used to be repeated under the
+  // heading as well, which is the same duplication in miniature.
+  assert(!block.includes("Planned 10 min"), `timing belongs in the table, not under the item too:\n${block}`);
+  assert(md.includes("| 5.1 Property Plan | 10 min | 26 min | +16 |"), `the table is where the timing lives:\n${md}`);
 
   // The whole point of the restructure: the item is named in the timing
   // table, as its heading, and once more in the action register — and
@@ -604,6 +607,74 @@ test("the chair and apologies typed on Prepare survive into the meeting", async 
   const m = (await readState(page)).meeting;
   assertEqual([m.chair, m.attendees, m.apologies], ["Sam Reed", "Mel, Andrew", "Jenica"],
     "all three should be carried into the running meeting");
+});
+
+/* ---- what each item is on the agenda for ---- */
+
+test("a pasted agenda keeps its own \"for discussion\" markers", async (page, origin) => {
+  await openApp(page, origin, { items: [] });
+  await page.fill(".paste-box textarea", [
+    "1.1 Disclosures (for noting)  1 min",
+    "3.1 Strategic goals - for discussion  10 mins",
+    "4.1 AI Usage Policy [for feedback]  5 mins",
+    "5.1 Property Plan  10 mins",
+  ].join("\n"));
+  await page.click('button:has-text("Parse and Add")');
+  const secs = (await readState(page)).meeting.sections;
+  assertEqual(secs.map(s => s.purpose), ["note", "discussion", "feedback", ""],
+    "each marker should be recognised, in brackets or after a dash");
+  // And lifted off the name, so it isn't said twice on every screen.
+  assertEqual(secs.map(s => s.name),
+    ["1.1 Disclosures", "3.1 Strategic goals", "4.1 AI Usage Policy", "5.1 Property Plan"],
+    "the marker becomes the purpose and leaves the name alone");
+});
+
+test("a purpose set on Prepare reaches the live agenda and the minutes", async (page, origin) => {
+  await openApp(page, origin, { items: ["3.1 Strategic goals"] });
+  await page.selectOption(".section-row select.purpose-select", "discussion");
+  await startMeeting(page);
+  // The chair is reminded in the moment — an item for noting is run very
+  // differently from one for discussion.
+  assert(await page.locator(".notes-header .purpose-chip").innerText() === "DISCUSSION",
+    "the current item should say what it is on the agenda for");
+
+  await typeNote(page, "/decision agreed\n");
+  await endMeeting(page);
+  const md = await page.evaluate(() =>
+    buildMinutesMarkdown(JSON.parse(localStorage.getItem("chair-meeting-manager:v1")).meeting));
+  assert(md.includes("| 3.1 Strategic goals | Discussion |"), `the table should carry the purpose:\n${md}`);
+  assert(md.includes("_For discussion_"), `and the item should say it in words:\n${md}`);
+});
+
+test("an agenda with no purposes set gets no column of dashes", async (page, origin) => {
+  const md = await seedFinished(page, origin, { sections: [["Budget", 5, 300]] });
+  assert(md.includes("| Item | Planned | Actual | Variance |"),
+    `an untagged agenda should keep the plain table:\n${md}`);
+  assert(!md.includes("Purpose"), "no purposes set means no Purpose column");
+});
+
+/* ---- the minutes are one pass down the agenda, not two ---- */
+
+test("the minutes list each agenda item once, including ones never reached", async (page, origin) => {
+  await seedFinished(page, origin, {
+    sections: [["1.1 Opening", 5, 300], ["1.2 Budget", 10, 600], ["1.3 Never got here", 5, null]],
+    captures: [{ id: "d1", kind: "decision", text: "agreed", owner: "",
+      sectionName: "1.2 Budget", timestamp: Date.now() }],
+  });
+  const headings = await page.$$eval(".section-label", els => els.map(e => e.textContent));
+  for (const name of ["1.1 Opening", "1.2 Budget", "1.3 Never got here"]) {
+    assertEqual(headings.filter(h => h === name).length, 1,
+      `"${name}" should appear once on the minutes, not in a timing list and again below`);
+  }
+  // An item the meeting never reached is still part of the agenda, and is
+  // marked as such rather than silently dropped.
+  // innerText, so it comes back as rendered — the label is upper-cased by CSS.
+  const unreached = (await page.locator(".item-unreached").innerText()).toLowerCase();
+  assert(unreached.includes("1.3 never got here") && unreached.includes("not reached"),
+    `an item never reached should say so: ${unreached}`);
+  // ...and gets no note box, because nothing happened under it.
+  assertEqual(await page.locator(".item-notes").count(), 2,
+    "only the items that ran should offer somewhere to write");
 });
 
 /* =====================================================================
