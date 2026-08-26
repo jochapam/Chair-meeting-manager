@@ -1165,11 +1165,13 @@ table.minutes-table th {
 .register-row { font-size: 0.95rem; padding: 8px 0; }
 .register-row .stat.dim { margin-left: 10px; }
 
-/* An item that ran but has nothing recorded is still on the agenda — it
-   just isn't part of the record. Quieter, so the items where something
-   actually happened lead the page. */
-.minute-item:not(.has-record) .minute-item-name { font-weight: 500; color: var(--text-mid); }
-.minute-item.unreached .minute-item-name { color: var(--text-dim); }
+/* Every item the meeting reached is a peer of every other, so they all get
+   the same heading. Weighting them by whether anything was recorded read as
+   inconsistent formatting rather than as hierarchy — and the record itself,
+   sitting indented underneath, already shows which items carry one.
+   An item never reached is the one real exception: it isn't part of the
+   record at all, so it reads quieter. */
+.minute-item.unreached .minute-item-name { font-weight: 500; color: var(--text-dim); }
 .minute-item.unreached .minute-item-meta { font-style: italic; }
 
 @media (max-width: 640px) {
