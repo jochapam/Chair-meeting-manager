@@ -62,14 +62,23 @@ function migrateLegacyCaptures(s) {
   const meetings = [s.meeting, ...(s.history || [])].filter(Boolean);
   for (const m of meetings) {
     if (!Array.isArray(m.captures)) m.captures = [];
-    const seen = new Set(m.captures.map(c => `${c.kind}|${(c.text || "").trim()}`));
+    // Match by count, not by presence. Real minutes repeat the same wording
+    // constantly ("noted", "approved", "endorsed" once per paper), so
+    // treating a repeat as a duplicate would quietly collapse a dozen
+    // separate resolutions into one. Each legacy entry cancels out at most
+    // one capture already holding that exact text; the surplus is adopted.
+    const spare = new Map();
+    for (const c of m.captures) {
+      const k = `${c.kind}|${(c.text || "").trim()}`;
+      spare.set(k, (spare.get(k) || 0) + 1);
+    }
 
     const adopt = (kind, text, owner) => {
       const clean = (text || "").trim();
       if (!clean) return;
       const key = `${kind}|${clean}`;
-      if (seen.has(key)) return;
-      seen.add(key);
+      const alreadyHeld = spare.get(key) || 0;
+      if (alreadyHeld > 0) { spare.set(key, alreadyHeld - 1); return; }
       m.captures.push({
         id: uid(),
         kind,
