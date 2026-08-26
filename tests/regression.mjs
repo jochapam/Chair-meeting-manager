@@ -696,6 +696,98 @@ test("an agenda item is set as a heading, not as a small-caps label", async (pag
 });
 
 /* =====================================================================
+   Refreshing shows you the meeting you were actually reading
+   ===================================================================== */
+
+/** Two filed meetings, plus a finished-but-unfiled one still in hand. */
+const twoFiled = (extra = {}) => {
+  const meeting = (id, title, notes = "") => ({
+    id, title, chair: "", attendees: "", apologies: "",
+    createdAt: Date.parse("2026-01-05T09:00:00"), endedAt: Date.parse("2026-01-05T10:00:00"),
+    currentIndex: 0, timerStatus: "ended", generalNotes: "",
+    breaks: [], deferred: [], captures: [],
+    sections: [{
+      id: id + "-s1", name: "Budget", purpose: "",
+      plannedSeconds: 600, originalPlannedSeconds: 600, status: "done",
+      startedAt: null, pausedAccum: 0, actualSeconds: 540, notes, autoReclaimed: 0,
+    }],
+  });
+  return {
+    view: "history",
+    meeting: meeting("m-inhand", "Still In Hand"),
+    savedAgendas: [],
+    history: [meeting("m-a", "March Board"), meeting("m-b", "April Board")],
+    ...extra,
+  };
+};
+
+const seedState = async (page, origin, state) => {
+  await gotoApp(page, origin);
+  await page.evaluate(s => localStorage.setItem("chair-meeting-manager:v1", JSON.stringify(s)), state);
+  await page.reload({ waitUntil: "domcontentloaded" });
+};
+
+test("refreshing while reading a filed meeting keeps you on that meeting", async (page, origin) => {
+  await seedState(page, origin, twoFiled());
+  await page.locator(".flat-row", { hasText: "March Board" }).locator('button:has-text("View")').click();
+  await page.waitForSelector(".page-head");
+  assertEqual(await page.locator(".page-head").innerText(), "March Board", "opened the one that was clicked");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".page-head");
+  // It used to land on whichever meeting happened to be in state — the
+  // click was never saved, and the boot block then forced the minutes view.
+  assertEqual(await page.locator(".page-head").innerText(), "March Board",
+    "a refresh must show the meeting you were reading, not another one");
+});
+
+test("a refresh does not drag you off History onto a finished meeting", async (page, origin) => {
+  await seedState(page, origin, twoFiled());
+  assert(await page.locator("text=Where the time goes").count() === 1, "seeded onto History");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".page-head");
+  assertEqual(await page.locator(".page-head").innerText(), "Where the time goes",
+    "a finished meeting in hand should not hijack the view on every refresh");
+});
+
+test("notes typed into a filed meeting survive a reload", async (page, origin) => {
+  await seedState(page, origin, twoFiled());
+  await page.locator(".flat-row", { hasText: "March Board" }).locator('button:has-text("View")').click();
+  await page.waitForSelector(".minute-item");
+  const ta = page.locator(".item-notes").first();
+  await ta.click();
+  await ta.type("carried unanimously");
+  await page.waitForTimeout(100);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".page-head");
+  const after = await readState(page);
+  const filed = after.history.find(h => h.id === "m-a");
+  assertEqual(filed.sections[0].notes, "carried unanimously",
+    "an edit to a filed meeting belongs to the history entry, not to a stray copy of it");
+
+  // And a second edit after the reload still reaches History, rather than
+  // being written to a duplicate that only looks like the same meeting.
+  const ta2 = page.locator(".item-notes").first();
+  await ta2.click();
+  await ta2.type(" on the voices");
+  await page.waitForTimeout(100);
+  const again = await readState(page);
+  assertEqual(again.history.find(h => h.id === "m-a").sections[0].notes,
+    "carried unanimously on the voices", "later edits must keep reaching History too");
+});
+
+test("every item the meeting reached gets the same heading", async (page, origin) => {
+  await seedFinished(page, origin, {
+    sections: [["1.1 Nothing recorded", 5, 300], ["1.2 Something happened", 5, 300, "we discussed it"]],
+  });
+  const weights = await page.$$eval(".minute-item-name",
+    els => els.map(e => parseInt(getComputedStyle(e).fontWeight, 10)));
+  assertEqual(weights[0], weights[1],
+    "an item with nothing written against it is still an agenda item, and reads like one");
+});
+
+/* =====================================================================
    runner
    ===================================================================== */
 

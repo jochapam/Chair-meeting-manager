@@ -2090,6 +2090,14 @@ function flatSectionLabel(text, value) {
 
 function renderMinutes() {
   clearTick();
+  // Viewing a filed meeting points state.meeting straight at the history
+  // entry, so edits land in History. A save/reload round-trip turns that
+  // one object into two — same id, separate objects — and every later edit
+  // would be written to the copy and lost. Re-alias on the way in.
+  if (state.meeting) {
+    const filed = state.history.find(h => h.id === state.meeting.id);
+    if (filed && filed !== state.meeting) state.meeting = filed;
+  }
   const m = state.meeting;
   if (!m) { switchView("setup"); return; }
 
@@ -2441,7 +2449,15 @@ function renderHistory() {
     row.appendChild(el("div", { class: "stat dim" }, fmtDateTimeLower(m.createdAt)));
     const actions = el("div", { class: "row" });
     const viewBtn = el("button", { class: "btn btn-small" }, "View");
-    viewBtn.addEventListener("click", (e) => { e.stopPropagation(); state.meeting = m; state.view = "minutes"; render(); });
+    // save(), or a refresh restores whatever state.meeting held before this
+    // click and the boot block lands you on a different meeting's minutes.
+    viewBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.meeting = m;
+      state.view = "minutes";
+      save();
+      render();
+    });
     const exportBtn = el("button", { class: "btn btn-small" }, "Export");
     exportBtn.addEventListener("click", (e) => { e.stopPropagation(); downloadMarkdown(m); });
     const delBtn = el("button", { class: "btn-icon btn-danger" }, "✕");
@@ -2480,10 +2496,14 @@ function render() {
 
 /* ---------- boot ---------- */
 
-// If we reloaded mid-meeting, land back on the right view.
+// If we reloaded mid-meeting, land back on the running meeting. A finished
+// meeting keeps whatever view was open instead — forcing minutes here threw
+// you off History or Prepare on every refresh, and did it holding the last
+// meeting that happened to be in state rather than the one you were reading.
 if (state.meeting) {
-  if (state.meeting.timerStatus === "running" || state.meeting.timerStatus === "paused") state.view = "live";
-  else if (state.meeting.timerStatus === "ended") state.view = "minutes";
+  const status = state.meeting.timerStatus;
+  if (status === "running" || status === "paused") state.view = "live";
+  else if (state.view === "live") state.view = "minutes";
 }
 
 // Reopening after the tab was closed for a while is the same problem as
