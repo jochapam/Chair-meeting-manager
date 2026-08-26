@@ -198,6 +198,33 @@ function fmtDateTimeLower(ts) {
 // "Nmin(s)" are skipped, which conveniently drops category headers
 // (e.g. "1. Board Governance") and untimed sub-item references
 // (e.g. "1.3.a Related Party Transactions") without any special-casing.
+// What an item is on the agenda for. A chair runs "for noting" very
+// differently from "for discussion", and a reader of the minutes should be
+// able to see what was being asked of the meeting rather than infer it.
+const PURPOSES = [
+  { key: "discussion", label: "Discussion", full: "For discussion" },
+  { key: "feedback", label: "Feedback", full: "For feedback" },
+  { key: "note", label: "Note", full: "For noting" },
+];
+
+const purposeOf = key => PURPOSES.find(p => p.key === key) || null;
+
+// Agendas usually already say this — "1.2 In camera session (for discussion)".
+// Lift it off the name when one is pasted in, rather than making a chair
+// re-tag thirty items by hand.
+const PURPOSE_SUFFIX = /[\s(\[–—:|-]*\bfor\s+(discussion|feedback|noting|note|information|info)\b[)\]]?[\s.]*$/i;
+
+function splitPurpose(name) {
+  const hit = name.match(PURPOSE_SUFFIX);
+  if (!hit) return { name, purpose: "" };
+  const word = hit[1].toLowerCase();
+  const stripped = name.slice(0, hit.index).replace(/[-–—:|(\[\s]+$/, "").trim();
+  // A line that is nothing but the marker keeps its text — better a badly
+  // named item than an empty one.
+  if (!stripped) return { name, purpose: "" };
+  return { name: stripped, purpose: word === "discussion" ? "discussion" : word === "feedback" ? "feedback" : "note" };
+}
+
 function parseAgendaText(text) {
   const parsed = [];
   for (const raw of text.split(/\r?\n/)) {
@@ -205,21 +232,23 @@ function parseAgendaText(text) {
     if (!line) continue;
     const m = line.match(/^(.*?)[\s\-–—:|]*(\d+)\s*(?:mins?|minutes?|m)\.?\s*$/i);
     if (!m) continue;
-    const name = m[1].trim().replace(/[-–—:|]\s*$/, "").trim();
+    const raw_name = m[1].trim().replace(/[-–—:|]\s*$/, "").trim();
     const minutes = parseInt(m[2], 10);
-    if (!name || !minutes) continue;
-    parsed.push({ name, minutes });
+    if (!raw_name || !minutes) continue;
+    const { name, purpose } = splitPurpose(raw_name);
+    parsed.push({ name, minutes, purpose });
   }
   return parsed;
 }
 
 /* ---------- meeting model ---------- */
 
-function newSection(name, minutes) {
+function newSection(name, minutes, purpose = "") {
   const planned = Math.max(1, Math.round(minutes)) * 60;
   return {
     id: uid(),
     name: name || "Untitled section",
+    purpose, // "" | discussion | feedback | note — see PURPOSES
     plannedSeconds: planned,
     originalPlannedSeconds: planned,
     status: "upcoming", // upcoming | current | done
@@ -495,6 +524,13 @@ function autoGrow(ta) {
   ta.style.height = ta.scrollHeight + "px";
 }
 
+// The little "DISCUSSION" / "FEEDBACK" / "NOTE" marker. Returns null for an
+// untagged item so it can be appended unconditionally.
+function purposeChip(section) {
+  const p = purposeOf(section.purpose);
+  return p ? el("span", { class: `purpose-chip purpose-${p.key}` }, p.label) : null;
+}
+
 function itemRecord(m, section) {
   const of = kind => (m.captures || []).filter(c => c.kind === kind && c.sectionName === section.name);
   return {
@@ -749,32 +785,32 @@ function buildMinutesMarkdown(m) {
     lines.push("_Listed in the order the items were taken, which differed from the agenda._");
     lines.push("");
   }
-  lines.push("| Item | Planned | Actual | Variance |");
-  lines.push("|---|---|---|---|");
+  // The Purpose column only appears on an agenda that was actually tagged,
+  // so a meeting that doesn't use them isn't given a column of dashes.
+  const anyPurpose = m.sections.some(s => purposeOf(s.purpose));
+  const purposeCell = s => {
+    const p = purposeOf(s.purpose);
+    return anyPurpose ? ` ${p ? p.label : "—"} |` : "";
+  };
+  lines.push(`| Item |${anyPurpose ? " Purpose |" : ""} Planned | Actual | Variance |`);
+  lines.push(`|---|${anyPurpose ? "---|" : ""}---|---|---|`);
   for (const s of m.sections) {
     const ran = s.actualSeconds != null;
     const actual = ran ? fmtMinutesRow(s.actualSeconds) : "—";
     const variance = ran ? fmtVariance(s.actualSeconds - s.originalPlannedSeconds) : "—";
-    lines.push(`| ${s.name} | ${fmtMinutesRow(s.originalPlannedSeconds)} | ${actual} | ${variance} |`);
+    lines.push(`| ${s.name} |${purposeCell(s)} ${fmtMinutesRow(s.originalPlannedSeconds)} | ${actual} | ${variance} |`);
   }
   // A total row, so the figures quoted above the table can be checked
   // against it. Both come from the same unrounded seconds — without this
   // a reader adding the column would land a few minutes off, because each
   // row is rounded on its own.
-  lines.push(`| **Total** | **${fmtMinutes(totalPlanned)}** | **${fmtMinutes(totalActual)}** | **${fmtVariance(totalActual - totalPlanned)}** |`);
+  lines.push(`| **Total** |${anyPurpose ? " |" : ""} **${fmtMinutes(totalPlanned)}** | **${fmtMinutes(totalActual)}** | **${fmtVariance(totalActual - totalPlanned)}** |`);
   lines.push("");
   // Say plainly why the column need not add up to the total, rather than
   // leaving a reader to wonder whether the figures are wrong.
   const briefItems = m.sections.filter(x => x.actualSeconds != null && x.actualSeconds > 0 && Math.round(x.actualSeconds / 60) === 0).length;
   if (briefItems) {
     lines.push(`_Each row is rounded to the nearest minute; ${briefItems} item${briefItems === 1 ? "" : "s"} took under a minute. The totals are exact._`);
-    lines.push("");
-  }
-
-  if (m.deferred && m.deferred.length) {
-    lines.push("## Deferred to Next Meeting");
-    lines.push("");
-    for (const d of m.deferred) lines.push(`- ${d.name} (${fmtMinutes(d.originalPlannedSeconds)})`);
     lines.push("");
   }
 
@@ -788,9 +824,12 @@ function buildMinutesMarkdown(m) {
     if (!itemHasRecord(r)) continue;
     lines.push(`## ${sec.name}`);
     lines.push("");
-    if (sec.actualSeconds != null) {
-      const variance = fmtVariance(sec.actualSeconds - sec.originalPlannedSeconds);
-      lines.push(`_Planned ${fmtMinutesRow(sec.originalPlannedSeconds)} · Actual ${fmtMinutesRow(sec.actualSeconds)} (${variance})_`);
+    // No timing line here. The table above already gives every item its
+    // planned, actual and variance, and repeating it under the heading was
+    // the same duplication this structure exists to remove.
+    const p = purposeOf(sec.purpose);
+    if (p) {
+      lines.push(`_${p.full}_`);
       lines.push("");
     }
     if (r.notes) {
@@ -814,6 +853,13 @@ function buildMinutesMarkdown(m) {
     lines.push(...labelledBlock("Decision", "Decisions", orphans.filter(c => c.kind === "decision").map(d => d.text)));
     lines.push(...labelledBlock("Motion", "Motions", orphans.filter(c => c.kind === "motion").map(mo => motionParts(mo).outcome)));
     lines.push(...labelledBlock("Action", "Actions", orphans.filter(c => c.kind === "action").map(a => actionLine(a))));
+  }
+
+  if (m.deferred && m.deferred.length) {
+    lines.push("## Deferred to Next Meeting");
+    lines.push("");
+    for (const d of m.deferred) lines.push(`- ${d.name} (${fmtMinutes(d.originalPlannedSeconds)})`);
+    lines.push("");
   }
 
   // The one list worth repeating. Actions are the part of the minutes with
@@ -1207,12 +1253,17 @@ function renderSetup() {
 
   const addRow = el("div", { class: "row", style: "margin-top:10px;gap:12px" });
   const nameField = el("input", { class: "underline-input", type: "text", placeholder: "New agenda item", style: "flex:1" });
+  const purposeField = el("select", { class: "purpose-select", title: "What this item is on the agenda for" });
+  purposeField.appendChild(el("option", { value: "" }, "Purpose"));
+  for (const p of PURPOSES) purposeField.appendChild(el("option", { value: p.key }, p.label));
   const durField = el("input", { class: "underline-input dur-input", type: "number", min: "1", value: "10", style: "width:64px;text-align:right" });
   const addBtn = el("button", { class: "btn btn-black" }, "Add");
   addBtn.addEventListener("click", () => {
-    const name = nameField.value.trim() || "Untitled item";
+    // A name may already carry its own marker — "Price Review (for feedback)"
+    // — whether it was typed or pasted, so read it either way.
+    const typed = splitPurpose(nameField.value.trim() || "Untitled item");
     const dur = Math.max(1, parseInt(durField.value, 10) || 10);
-    m.sections.push(newSection(name, dur));
+    m.sections.push(newSection(typed.name, dur, purposeField.value || typed.purpose));
     save();
     renderSectionRows(list);
     updateAgendaTotal();
@@ -1222,6 +1273,7 @@ function renderSetup() {
   });
   nameField.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
   addRow.appendChild(nameField);
+  addRow.appendChild(purposeField);
   addRow.appendChild(durField);
   addRow.appendChild(el("span", { class: "min-label" }, "min"));
   addRow.appendChild(addBtn);
@@ -1229,10 +1281,10 @@ function renderSetup() {
 
   const pasteBox = el("div", { class: "paste-box" });
   pasteBox.appendChild(el("div", { class: "paste-head" }, "Paste an agenda"));
-  const importArea = el("textarea", { placeholder: "1.2 In camera session   10 mins\n1.3 Related party transactions   15 mins" });
+  const importArea = el("textarea", { placeholder: "1.2 In camera session (for discussion)   10 mins\n1.3 Related party transactions   15 mins" });
   pasteBox.appendChild(importArea);
   const pasteFoot = el("div", { class: "paste-foot" });
-  pasteFoot.appendChild(el("p", null, "Lines ending in a duration become items. Headers and untimed references are skipped."));
+  pasteFoot.appendChild(el("p", null, "Lines ending in a duration become items. Headers and untimed references are skipped. A trailing \u201cfor discussion\u201d, \u201cfor feedback\u201d or \u201cfor noting\u201d is read as the item\u2019s purpose."));
   const importBtn = el("button", { class: "btn" }, "Parse and Add");
   const importStatus = el("span", { style: "font-size:0.8rem;color:var(--text-dim)" });
   importBtn.addEventListener("click", () => {
@@ -1242,7 +1294,7 @@ function renderSetup() {
       importStatus.style.color = "var(--bad)";
       return;
     }
-    for (const item of found) m.sections.push(newSection(item.name, item.minutes));
+    for (const item of found) m.sections.push(newSection(item.name, item.minutes, item.purpose));
     save();
     renderSetup();
   });
@@ -1409,6 +1461,14 @@ function renderSectionRows(list) {
       nameCol.appendChild(suggEl);
     }
 
+    // Set here rather than in the moment: deciding an item is "for noting"
+    // is a preparation decision, and it changes how the chair runs it.
+    const purposeSel = el("select", { class: "purpose-select", title: "What this item is on the agenda for" });
+    purposeSel.appendChild(el("option", { value: "" }, "Purpose"));
+    for (const p of PURPOSES) purposeSel.appendChild(el("option", { value: p.key }, p.label));
+    purposeSel.value = s.purpose || "";
+    purposeSel.addEventListener("change", (e) => { s.purpose = e.target.value; save(); });
+
     const durInput = el("input", { type: "number", min: "1", class: "dur-input underline-input", value: String(Math.round(s.plannedSeconds / 60)) });
     durInput.addEventListener("input", (e) => {
       const v = Math.max(1, parseInt(e.target.value, 10) || 1);
@@ -1437,6 +1497,7 @@ function renderSectionRows(list) {
     });
 
     row.appendChild(nameCol);
+    row.appendChild(purposeSel);
     row.appendChild(durInput);
     row.appendChild(el("span", { class: "min-label" }, "min"));
     row.appendChild(handle);
@@ -1505,6 +1566,7 @@ function renderLive() {
   const currentItemBar = el("div", { class: "current-item-bar" });
   currentItemBar.appendChild(el("div", { class: "notes-header" }, [
     el("h2", null, sec.name),
+    purposeChip(sec),
   ]));
 
   const statusZone = el("div", { class: "item-bar-status" });
@@ -1591,7 +1653,7 @@ function renderLive() {
     const statusIcon = s.status === "done" ? "✓" : s.status === "current" ? "▶" : String(idx + 1);
     item.appendChild(el("div", { class: "agenda-status" }, statusIcon));
     const info = el("div", { class: "info" });
-    info.appendChild(el("div", { class: "name" }, s.name));
+    info.appendChild(el("div", { class: "name" }, [s.name, purposeChip(s)]));
     const metaEl = el("div", { class: "meta" }, railMetaText(s));
     info.appendChild(metaEl);
     if (s.status === "upcoming") {
@@ -2096,35 +2158,6 @@ function renderMinutes() {
   app.appendChild(statRow);
   app.appendChild(el("hr", { class: "page-hr" }));
 
-  // --- timing ---
-  app.appendChild(flatSectionLabel("Timing"));
-  m.sections.forEach(s => {
-    const row = el("div", { class: "flat-row" });
-    row.appendChild(el("div", { class: "name" }, s.name));
-    row.appendChild(el("div", { class: "stat dim" }, fmtMinutesRow(s.originalPlannedSeconds)));
-    if (s.actualSeconds != null) {
-      row.appendChild(el("div", { class: "stat" }, fmtMinutesRow(s.actualSeconds)));
-      const delta = s.actualSeconds - s.originalPlannedSeconds;
-      const deltaText = Math.abs(Math.round(delta / 60)) < 1 ? "0m" : (delta >= 0 ? "+" : "−") + Math.round(Math.abs(delta) / 60) + "m";
-      row.appendChild(el("div", { class: `stat delta ${delta < 0 ? "under" : delta > 0 ? "over" : ""}` }, deltaText));
-    } else {
-      row.appendChild(el("div", { class: "stat dim" }, "—"));
-      row.appendChild(el("div", { class: "stat" }, ""));
-    }
-    app.appendChild(row);
-  });
-
-  // --- deferred ---
-  if (m.deferred && m.deferred.length) {
-    app.appendChild(flatSectionLabel("Deferred to Next Meeting"));
-    m.deferred.forEach(d => {
-      const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, d.name));
-      row.appendChild(el("div", { class: "stat dim" }, fmtMinutes(d.originalPlannedSeconds)));
-      app.appendChild(row);
-    });
-  }
-
   // Decisions, actions and motions are all just filtered views over
   // m.captures — the one place that actually remembers which agenda item
   // each was filed under. Deleting a row removes that capture directly,
@@ -2164,33 +2197,39 @@ function renderMinutes() {
     a.text,
   ]);
 
-  // --- the record, item by item ---
+  // --- the agenda, item by item ---
   //
-  // Everything captured against an item sits under that item's heading, so
-  // the item name is written once and its whole record is in one place.
-  // Items that ran but have nothing recorded still get a heading and an
-  // empty notes box, which is where a chair writes up an item afterwards;
-  // the export leaves those out.
+  // One pass down the agenda, and only one. Each item is named once and
+  // carries its own timing, what it was on the agenda for, and everything
+  // recorded against it. There used to be a separate timing list above
+  // this, which meant every item that ran was written out twice — the
+  // heading row already says planned, actual and variance.
   const grow = [];
-  const body = m.sections.filter(s => s.actualSeconds != null || itemHasRecord(itemRecord(m, s)));
-  if (body.length) app.appendChild(el("hr", { class: "page-hr" }));
-  body.forEach(sec => {
+  app.appendChild(flatSectionLabel("Agenda", `${m.sections.length} item${m.sections.length === 1 ? "" : "s"}`));
+  m.sections.forEach(sec => {
     const r = itemRecord(m, sec);
-    let timing = null;
-    if (sec.actualSeconds != null) {
-      const delta = sec.actualSeconds - sec.originalPlannedSeconds;
-      timing = `${fmtMinutesRow(sec.originalPlannedSeconds)} planned · ${fmtMinutesRow(sec.actualSeconds)} actual (${fmtVariance(delta)})`;
-    }
-    app.appendChild(flatSectionLabel(sec.name, timing));
+    const ran = sec.actualSeconds != null;
+    const timing = ran
+      ? `${fmtMinutesRow(sec.originalPlannedSeconds)} planned · ${fmtMinutesRow(sec.actualSeconds)} actual (${fmtVariance(sec.actualSeconds - sec.originalPlannedSeconds)})`
+      : `${fmtMinutesRow(sec.originalPlannedSeconds)} planned · not reached`;
+    const head = flatSectionLabel(sec.name, timing);
+    const chip = purposeChip(sec);
+    if (chip) head.insertBefore(chip, head.children[1]);
+    if (!ran) head.classList.add("item-unreached");
+    app.appendChild(head);
 
-    const ta = el("textarea", { class: "underline-input item-notes", rows: "1", placeholder: "Add a note for the record" });
-    ta.value = sec.notes || "";
-    ta.addEventListener("input", (e) => { sec.notes = e.target.value; save(); autoGrow(ta); });
-    app.appendChild(el("div", { class: "field" }, ta));
-    // Sized after it's in the document — scrollHeight needs a layout. An
-    // agenda can run to 30 items, so an empty note box is one line high
-    // rather than a fixed block of nothing.
-    grow.push(ta);
+    // Nothing happened under an item that was never reached, so it gets no
+    // note box to fill in — just its line in the agenda.
+    if (ran) {
+      const ta = el("textarea", { class: "underline-input item-notes", rows: "1", placeholder: "Add a note for the record" });
+      ta.value = sec.notes || "";
+      ta.addEventListener("input", (e) => { sec.notes = e.target.value; save(); autoGrow(ta); });
+      app.appendChild(el("div", { class: "field" }, ta));
+      // Sized after it's in the document — scrollHeight needs a layout. An
+      // agenda can run to 30 items, so an empty note box is one line high
+      // rather than a fixed block of nothing.
+      grow.push(ta);
+    }
 
     r.decisions.forEach(d => app.appendChild(decisionRow(d)));
     r.motions.forEach(mo => app.appendChild(motionRow(mo)));
@@ -2205,6 +2244,17 @@ function renderMinutes() {
     orphans.filter(c => c.kind === "decision").forEach(d => app.appendChild(decisionRow(d)));
     orphans.filter(c => c.kind === "motion").forEach(mo => app.appendChild(motionRow(mo)));
     orphans.filter(c => c.kind === "action").forEach(a => app.appendChild(actionRow(a)));
+  }
+
+  // --- deferred ---
+  if (m.deferred && m.deferred.length) {
+    app.appendChild(flatSectionLabel("Deferred to Next Meeting"));
+    m.deferred.forEach(d => {
+      const row = el("div", { class: "flat-row" });
+      row.appendChild(el("div", { class: "name" }, d.name));
+      row.appendChild(el("div", { class: "stat dim" }, fmtMinutes(d.originalPlannedSeconds)));
+      app.appendChild(row);
+    });
   }
 
   // The one list worth repeating. Actions are the part of the minutes with
