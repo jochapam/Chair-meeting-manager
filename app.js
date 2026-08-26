@@ -235,7 +235,9 @@ function newMeeting() {
   return {
     id: uid(),
     title: "",
-    attendees: "",
+    chair: "",
+    attendees: "",   // who was present
+    apologies: "",
     createdAt: null,
     endedAt: null,
     sections: [],
@@ -263,6 +265,7 @@ function saveAgendaForLater(isStanding) {
   state.savedAgendas.unshift({
     id: uid(),
     title: m.title,
+    chair: m.chair,
     attendees: m.attendees,
     sections: JSON.parse(JSON.stringify(m.sections)),
     savedAt: Date.now(),
@@ -279,7 +282,9 @@ function loadSavedAgenda(id) {
   const m = state.meeting;
   const applyLoad = () => {
     m.title = saved.title;
-    m.attendees = saved.attendees;
+    // Agendas saved before these fields existed have neither.
+    m.chair = saved.chair || "";
+    m.attendees = saved.attendees || "";
     m.sections = JSON.parse(JSON.stringify(saved.sections));
     save();
     renderSetup();
@@ -466,6 +471,58 @@ function extractOwner(text) {
 // and stripped from the resolution text itself.
 // "Approved" on its own records nothing: the agenda item is the subject of
 // the resolution, so it has to lead rather than trail in brackets.
+// Owners are typed inline as "@jenica", so they arrive lower-cased. Only
+// the first letter is touched: "WW" and "McDonald" must survive intact.
+function displayName(name) {
+  if (!name) return "";
+  return String(name).split(/\s+/).map(w => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+}
+
+// "25 Aug 2026, 5:20 pm – 7:15 pm" once the meeting has ended.
+function meetingWhen(m) {
+  if (!m.createdAt) return "";
+  const start = fmtDateTimeLower(m.createdAt);
+  return m.endedAt ? `${start} – ${fmtTimeOfDay(m.endedAt)}` : start;
+}
+
+// Everything recorded against one agenda item, so the minutes can be laid
+// out item by item instead of scattering an item's record across four
+// separate sections that each repeat its name.
+// Grow a note box to fit what's in it. The minutes are read far more often
+// than they're edited, so an unused box should not take up a fixed block.
+function autoGrow(ta) {
+  ta.style.height = "auto";
+  ta.style.height = ta.scrollHeight + "px";
+}
+
+function itemRecord(m, section) {
+  const of = kind => (m.captures || []).filter(c => c.kind === kind && c.sectionName === section.name);
+  return {
+    decisions: of("decision"),
+    actions: of("action"),
+    motions: of("motion"),
+    notes: (section.notes || "").trim(),
+  };
+}
+
+function itemHasRecord(r) {
+  return !!(r.notes || r.decisions.length || r.actions.length || r.motions.length);
+}
+
+// One line per action, used in both the item body and the register.
+function actionLine(a, { withItem = false } = {}) {
+  const who = displayName(a.owner);
+  const item = withItem && a.sectionName ? ` _(${a.sectionName})_` : "";
+  return `${who ? `${who} — ` : ""}${a.text}${item}`;
+}
+
+// "**Motion:** approved" for one, a bulleted list for several.
+function labelledBlock(singular, plural, entries) {
+  if (!entries.length) return [];
+  if (entries.length === 1) return [`**${singular}:** ${entries[0]}`, ""];
+  return [`**${plural}:**`, ...entries.map(e => `- ${e}`), ""];
+}
+
 function motionParts(mo) {
   const parties = [];
   if (mo.moved) parties.push(`Moved: ${mo.moved}`);
@@ -666,8 +723,10 @@ function buildMinutesMarkdown(m) {
   const lines = [];
   lines.push(`# ${m.title || "Untitled Meeting"}`);
   lines.push("");
-  lines.push(`- **Date:** ${fmtDateTime(m.createdAt)}`);
-  if (m.attendees) lines.push(`- **Attendees:** ${m.attendees}`);
+  lines.push(`- **Date:** ${meetingWhen(m)}`);
+  if (m.chair) lines.push(`- **Chair:** ${m.chair}`);
+  if (m.attendees) lines.push(`- **Present:** ${m.attendees}`);
+  if (m.apologies) lines.push(`- **Apologies:** ${m.apologies}`);
   const totalPlanned = m.sections.reduce((s, x) => s + x.originalPlannedSeconds, 0);
   // Only time that was actually spent. Falling back to plannedSeconds here
   // counted items that never ran as though they had, so ending a meeting
@@ -681,7 +740,7 @@ function buildMinutesMarkdown(m) {
   }
   lines.push("");
 
-  lines.push("## Agenda & Timing");
+  lines.push("## Timing summary");
   lines.push("");
   // Only claim this when the running order actually departed from the
   // prepared one — recorded at the moment it happens, since item names
@@ -719,49 +778,57 @@ function buildMinutesMarkdown(m) {
     lines.push("");
   }
 
-  const decisions = (m.captures || []).filter(c => c.kind === "decision");
-  if (decisions.length) {
-    lines.push("## Decisions");
+  // The body of the minutes, item by item. Everything recorded against an
+  // item — notes, decisions, motions, actions — sits under its heading, so
+  // the item name is written once and the whole record of it is in one
+  // place. Items with nothing recorded stay in the timing table above
+  // rather than becoming empty headings here.
+  for (const sec of m.sections) {
+    const r = itemRecord(m, sec);
+    if (!itemHasRecord(r)) continue;
+    lines.push(`## ${sec.name}`);
     lines.push("");
-    for (const d of decisions) lines.push(`- ${d.text}${d.sectionName ? ` _(${d.sectionName})_` : ""}`);
-    lines.push("");
-  }
-
-  const actionItems = (m.captures || []).filter(c => c.kind === "action");
-  if (actionItems.length) {
-    lines.push("## Action Items");
-    lines.push("");
-    for (const a of actionItems) {
-      lines.push(`- [ ] ${a.text}${a.owner ? ` (Owner: ${a.owner})` : ""}${a.sectionName ? ` _(${a.sectionName})_` : ""}`);
-    }
-    lines.push("");
-  }
-
-  const motions = (m.captures || []).filter(c => c.kind === "motion");
-  if (motions.length) {
-    lines.push("## Motions");
-    lines.push("");
-    for (const mo of motions) {
-      const p = motionParts(mo);
-      const head = p.item ? `**${p.item}** — ${p.outcome}` : p.outcome;
-      lines.push(`- ${head}${p.parties ? `. ${p.parties}` : ""}`);
-    }
-    lines.push("");
-  }
-
-  const notedSections = m.sections.filter(s => s.notes && s.notes.trim());
-  if (notedSections.length) {
-    lines.push("## Notes by Item");
-    lines.push("");
-    for (const s of notedSections) {
-      lines.push(`### ${s.name}`);
-      lines.push(s.notes.trim());
+    if (sec.actualSeconds != null) {
+      const variance = fmtVariance(sec.actualSeconds - sec.originalPlannedSeconds);
+      lines.push(`_Planned ${fmtMinutesRow(sec.originalPlannedSeconds)} · Actual ${fmtMinutesRow(sec.actualSeconds)} (${variance})_`);
       lines.push("");
     }
+    if (r.notes) {
+      lines.push(r.notes);
+      lines.push("");
+    }
+    lines.push(...labelledBlock("Decision", "Decisions", r.decisions.map(d => d.text)));
+    lines.push(...labelledBlock("Motion", "Motions", r.motions.map(mo => {
+      const p = motionParts(mo);
+      return `${p.outcome}${p.parties ? `. ${p.parties}` : ""}`;
+    })));
+    lines.push(...labelledBlock("Action", "Actions", r.actions.map(a => actionLine(a))));
+  }
+
+  // Captures whose agenda item was never recorded — only migrated entries
+  // from much older meetings. Better an honest heading than dropping them.
+  const orphans = (m.captures || []).filter(c => !c.sectionName);
+  if (orphans.length) {
+    lines.push("## Not attributed to an item");
+    lines.push("");
+    lines.push(...labelledBlock("Decision", "Decisions", orphans.filter(c => c.kind === "decision").map(d => d.text)));
+    lines.push(...labelledBlock("Motion", "Motions", orphans.filter(c => c.kind === "motion").map(mo => motionParts(mo).outcome)));
+    lines.push(...labelledBlock("Action", "Actions", orphans.filter(c => c.kind === "action").map(a => actionLine(a))));
+  }
+
+  // The one list worth repeating. Actions are the part of the minutes with
+  // a life after the meeting — people work from them, and nobody should
+  // have to read 28 items to find what they owe.
+  const actionItems = (m.captures || []).filter(c => c.kind === "action");
+  if (actionItems.length) {
+    lines.push("## Action Register");
+    lines.push("");
+    for (const a of actionItems) lines.push(`- [ ] ${actionLine(a, { withItem: true })}`);
+    lines.push("");
   }
 
   if (m.generalNotes && m.generalNotes.trim()) {
-    lines.push("## General Notes");
+    lines.push("## Closing Notes");
     lines.push("");
     lines.push(m.generalNotes.trim());
     lines.push("");
@@ -1102,14 +1169,21 @@ function renderSetup() {
   titleField.appendChild(titleInput);
   main.appendChild(titleField);
 
-  const attendeesField = el("div", { class: "field" });
-  attendeesField.appendChild(el("label", { class: "field-label" }, "Attendees"));
-  const attendeesInput = el("input", {
-    class: "underline-input", type: "text", value: m.attendees, placeholder: "Optional — names, comma separated",
-    oninput: (e) => { m.attendees = e.target.value; save(); },
-  });
-  attendeesField.appendChild(attendeesInput);
-  main.appendChild(attendeesField);
+  // Chair, Present and Apologies are what a reader of the minutes checks
+  // first — who ran it, who was in the room, and who was excused. They go
+  // in here rather than being reconstructed afterwards from memory.
+  const textField = (label, key, placeholder) => {
+    const field = el("div", { class: "field" });
+    field.appendChild(el("label", { class: "field-label" }, label));
+    field.appendChild(el("input", {
+      class: "underline-input", type: "text", value: m[key] || "", placeholder,
+      oninput: (e) => { m[key] = e.target.value; save(); },
+    }));
+    return field;
+  };
+  main.appendChild(textField("Chair", "chair", "Optional — who is chairing"));
+  main.appendChild(textField("Present", "attendees", "Optional — names, comma separated"));
+  main.appendChild(textField("Apologies", "apologies", "Optional — who sent apologies"));
 
   main.appendChild(el("div", { class: "section-label-row" }, [
     el("span", { class: "section-label" }, "Agenda"),
@@ -1964,7 +2038,13 @@ function renderMinutes() {
   const headMain = el("div", null);
   headMain.appendChild(el("div", { class: "page-eyebrow" }, "Minutes"));
   headMain.appendChild(el("h1", { class: "page-head" }, m.title || "Untitled meeting"));
-  headMain.appendChild(el("p", { class: "page-sub", style: "margin:0" }, fmtDateTimeLower(m.createdAt) + (m.attendees ? " · " + m.attendees : "")));
+  headMain.appendChild(el("p", { class: "page-sub", style: "margin:0" }, meetingWhen(m)));
+  const who = [
+    m.chair ? `Chair: ${m.chair}` : null,
+    m.attendees ? `Present: ${m.attendees}` : null,
+    m.apologies ? `Apologies: ${m.apologies}` : null,
+  ].filter(Boolean);
+  if (who.length) headMain.appendChild(el("p", { class: "page-sub", style: "margin:2px 0 0" }, who.join(" · ")));
   headRow.appendChild(headMain);
 
   const headActions = el("div", { class: "row" });
@@ -2045,7 +2125,7 @@ function renderMinutes() {
     });
   }
 
-  // Decisions, Action Items and Motions are all just filtered views over
+  // Decisions, actions and motions are all just filtered views over
   // m.captures — the one place that actually remembers which agenda item
   // each was filed under. Deleting a row removes that capture directly,
   // so there's no second list to fall out of sync with.
@@ -2056,73 +2136,99 @@ function renderMinutes() {
     renderMinutes();
   }
 
-  const decisions = (m.captures || []).filter(c => c.kind === "decision");
-  if (decisions.length) {
-    app.appendChild(flatSectionLabel("Decisions"));
-    decisions.forEach(d => {
-      const row = el("div", { class: "flat-row" });
-      row.appendChild(el("div", { class: "name" }, [d.text, sectionTag(d.sectionName)]));
-      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
-      rm.addEventListener("click", () => removeCaptureRow(d));
-      row.appendChild(rm);
-      app.appendChild(row);
-    });
+  // One row for one thing said or decided, with the label that says which
+  // kind it is. The agenda item isn't repeated — the heading above it
+  // already says which item this is.
+  function recordRow(c, label, body) {
+    const row = el("div", { class: "flat-row" });
+    row.appendChild(el("div", { class: "name" }, [
+      el("span", { class: "record-label" }, label),
+      ...[].concat(body),
+    ]));
+    const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
+    rm.addEventListener("click", () => removeCaptureRow(c));
+    row.appendChild(rm);
+    return row;
   }
 
+  const decisionRow = d => recordRow(d, "Decision", d.text);
+  const motionRow = mo => {
+    const p = motionParts(mo);
+    return recordRow(mo, "Motion", [
+      p.outcome,
+      p.parties ? el("span", { class: "stat dim", style: "margin-left:8px" }, p.parties) : null,
+    ]);
+  };
+  const actionRow = a => recordRow(a, "Action", [
+    a.owner ? el("strong", null, displayName(a.owner) + " — ") : null,
+    a.text,
+  ]);
+
+  // --- the record, item by item ---
+  //
+  // Everything captured against an item sits under that item's heading, so
+  // the item name is written once and its whole record is in one place.
+  // Items that ran but have nothing recorded still get a heading and an
+  // empty notes box, which is where a chair writes up an item afterwards;
+  // the export leaves those out.
+  const grow = [];
+  const body = m.sections.filter(s => s.actualSeconds != null || itemHasRecord(itemRecord(m, s)));
+  if (body.length) app.appendChild(el("hr", { class: "page-hr" }));
+  body.forEach(sec => {
+    const r = itemRecord(m, sec);
+    let timing = null;
+    if (sec.actualSeconds != null) {
+      const delta = sec.actualSeconds - sec.originalPlannedSeconds;
+      timing = `${fmtMinutesRow(sec.originalPlannedSeconds)} planned · ${fmtMinutesRow(sec.actualSeconds)} actual (${fmtVariance(delta)})`;
+    }
+    app.appendChild(flatSectionLabel(sec.name, timing));
+
+    const ta = el("textarea", { class: "underline-input item-notes", rows: "1", placeholder: "Add a note for the record" });
+    ta.value = sec.notes || "";
+    ta.addEventListener("input", (e) => { sec.notes = e.target.value; save(); autoGrow(ta); });
+    app.appendChild(el("div", { class: "field" }, ta));
+    // Sized after it's in the document — scrollHeight needs a layout. An
+    // agenda can run to 30 items, so an empty note box is one line high
+    // rather than a fixed block of nothing.
+    grow.push(ta);
+
+    r.decisions.forEach(d => app.appendChild(decisionRow(d)));
+    r.motions.forEach(mo => app.appendChild(motionRow(mo)));
+    r.actions.forEach(a => app.appendChild(actionRow(a)));
+  });
+
+  // Captures whose agenda item was never recorded — only migrated entries
+  // from much older meetings. Better an honest heading than dropping them.
+  const orphans = (m.captures || []).filter(c => !c.sectionName);
+  if (orphans.length) {
+    app.appendChild(flatSectionLabel("Not attributed to an item"));
+    orphans.filter(c => c.kind === "decision").forEach(d => app.appendChild(decisionRow(d)));
+    orphans.filter(c => c.kind === "motion").forEach(mo => app.appendChild(motionRow(mo)));
+    orphans.filter(c => c.kind === "action").forEach(a => app.appendChild(actionRow(a)));
+  }
+
+  // The one list worth repeating. Actions are the part of the minutes with
+  // a life after the meeting — people work from them, and nobody should
+  // have to read every item to find what they owe. Deleting is done above,
+  // against the item, so this stays a plain read-only register.
   const actionItems = (m.captures || []).filter(c => c.kind === "action");
   if (actionItems.length) {
-    app.appendChild(flatSectionLabel("Action Items"));
+    app.appendChild(flatSectionLabel("Action Register"));
     actionItems.forEach(a => {
       const row = el("div", { class: "flat-row" });
       row.appendChild(el("div", { class: "name" }, [
+        a.owner ? el("strong", null, displayName(a.owner) + " — ") : null,
         a.text,
-        a.owner ? el("span", { class: "stat dim", style: "margin-left:8px" }, "@" + a.owner) : null,
         sectionTag(a.sectionName),
       ]));
-      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
-      rm.addEventListener("click", () => removeCaptureRow(a));
-      row.appendChild(rm);
       app.appendChild(row);
     });
   }
 
-  const motions = (m.captures || []).filter(c => c.kind === "motion");
-  if (motions.length) {
-    app.appendChild(flatSectionLabel("Motions"));
-    motions.forEach(mo => {
-      const row = el("div", { class: "flat-row" });
-      const p = motionParts(mo);
-      row.appendChild(el("div", { class: "name" }, [
-        p.item ? el("strong", null, `${p.item} — `) : null,
-        p.outcome,
-        p.parties ? el("span", { class: "stat dim", style: "margin-left:8px" }, p.parties) : null,
-      ]));
-      const rm = el("button", { class: "btn-icon btn-danger" }, "✕");
-      rm.addEventListener("click", () => removeCaptureRow(mo));
-      row.appendChild(rm);
-      app.appendChild(row);
-    });
-  }
+  grow.forEach(autoGrow);
 
-  // --- notes by item (only items with actual notes) ---
-  const notedSections = m.sections.filter(s => s.notes && s.notes.trim());
-  if (notedSections.length) {
-    app.appendChild(flatSectionLabel("Notes by Item"));
-    notedSections.forEach(s => {
-      const field = el("div", { class: "field" });
-      field.appendChild(el("label", { class: "field-label" }, s.name));
-      const ta = el("textarea", { class: "underline-input" }, s.notes);
-      ta.value = s.notes;
-      ta.addEventListener("input", (e) => { s.notes = e.target.value; save(); });
-      field.appendChild(ta);
-      app.appendChild(field);
-    });
-  } else {
-    app.appendChild(flatSectionLabel("Notes by Item"));
-  }
-
+  app.appendChild(flatSectionLabel("Closing Notes"));
   const closingField = el("div", { class: "field" });
-  closingField.appendChild(el("label", { class: "field-label" }, "Closing Notes"));
   const generalArea = el("textarea", { class: "underline-input", placeholder: "Anything for the record that didn't belong to one item." }, m.generalNotes);
   generalArea.value = m.generalNotes;
   generalArea.addEventListener("input", (e) => { m.generalNotes = e.target.value; save(); });

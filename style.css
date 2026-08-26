@@ -1015,9 +1015,35 @@ table.minutes-table th {
     resize: none;
     color: #000;
   }
-  textarea { height: auto; min-height: 0; overflow: visible; }
+  textarea { height: auto !important; min-height: 0; overflow: visible; }
+  /* An item nobody wrote anything against prints as nothing, not as a
+     blank line — a 30-item agenda would otherwise print mostly empty. */
+  .item-notes:placeholder-shown { display: none; }
 
   .flat-row { break-inside: avoid; }
   .section-label-row { break-after: avoid; }
   .field { break-inside: avoid; }
+}
+
+/* Kind marker on a minutes record row — "Decision", "Motion", "Action".
+   Sits ahead of the text so a row reads as what it is at a glance, without
+   repeating the agenda item, which is the heading directly above it. */
+.record-label {
+  display: inline-block;
+  min-width: 66px;
+  margin-right: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Per-item note box on the minutes. Sized to its content by autoGrow(), so
+   an item with nothing written against it is one line, not a fixed block —
+   a 30-item agenda would otherwise be a page of empty boxes. */
+.item-notes {
+  min-height: 0;
+  resize: none;
+  overflow: hidden;
 }
