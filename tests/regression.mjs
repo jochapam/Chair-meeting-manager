@@ -410,19 +410,20 @@ test("repeated wording in an old meeting is kept, not collapsed into one", async
    ===================================================================== */
 
 /** A finished meeting with known timings, seeded straight into storage. */
-async function seedFinished(page, origin, { sections, captures = [], orderChanged = false }) {
+async function seedFinished(page, origin, { sections, captures = [], orderChanged = false, meeting = {} }) {
   const state = {
     view: "minutes", savedAgendas: [], history: [],
     meeting: {
-      id: "m1", title: "Board", attendees: "",
+      id: "m1", title: "Board", chair: "", attendees: "", apologies: "",
       createdAt: Date.parse("2026-01-05T09:00:00"), endedAt: Date.parse("2026-01-05T11:00:00"),
       currentIndex: sections.length - 1, timerStatus: "ended", generalNotes: "",
       breaks: [], deferred: [], orderChanged, captures,
-      sections: sections.map(([name, planMin, actualSec], i) => ({
+      sections: sections.map(([name, planMin, actualSec, notes = ""], i) => ({
         id: "s" + i, name, plannedSeconds: planMin * 60, originalPlannedSeconds: planMin * 60,
         status: "done", startedAt: null, pausedAccum: 0, actualSeconds: actualSec,
-        notes: "", autoReclaimed: 0,
+        notes, autoReclaimed: 0,
       })),
+      ...meeting,
     },
   };
   await gotoApp(page, origin);
@@ -489,14 +490,97 @@ test("a motion reads as a resolution about its agenda item", async (page, origin
         timestamp: Date.now() },
     ],
   });
+  const body = md.split("## 4.1 AI Usage Policy")[1];
+  assert(body, `the item should have its own section:\n${md}`);
   assert(
-    md.includes("- **4.1 AI Usage Policy** — approved. Moved: Mel. Seconded: Andrew"),
-    `the item should lead and the parties be named:\n${md.split("## Motions")[1]}`,
+    body.includes("- approved. Moved: Mel. Seconded: Andrew"),
+    `the resolution should name the parties:\n${body}`,
+  );
+  assert(body.includes("- noted"), "a motion without a mover should still be recorded");
+  assert(
+    !body.split("## ")[0].includes("**4.1 AI Usage Policy**"),
+    "the item name is the heading — it must not be repeated on every row",
+  );
+});
+
+/* ---- the record is organised by agenda item, not duplicated ---- */
+
+test("everything recorded against an item sits under that one heading", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [
+      ["5.1 Property Plan", 10, 26 * 60, "@mel is it divestment or recycling?"],
+      ["5.2 Budget", 10, 8 * 60],
+    ],
+    captures: [
+      { id: "d1", kind: "decision", text: "criteria to be drafted", owner: "",
+        sectionName: "5.1 Property Plan", timestamp: Date.now() },
+      { id: "a1", kind: "action", text: "to introduce Wayne to ASFI", owner: "andrew",
+        sectionName: "5.1 Property Plan", timestamp: Date.now() },
+    ],
+  });
+
+  const block = md.split("## 5.1 Property Plan")[1].split("\n## ")[0];
+  assert(block.includes("@mel is it divestment or recycling?"), `notes belong to the item:\n${block}`);
+  assert(block.includes("**Decision:** criteria to be drafted"), `decision belongs to the item:\n${block}`);
+  assert(block.includes("**Action:** Andrew — to introduce Wayne to ASFI"), `action belongs to the item:\n${block}`);
+  assert(block.includes("_Planned 10 min · Actual 26 min (+16)_"), `the item carries its own timing:\n${block}`);
+
+  // The whole point of the restructure: the item is named in the timing
+  // table, as its heading, and once more in the action register — and
+  // nowhere else. It used to be repeated for every single thing filed.
+  assertEqual(
+    md.split("5.1 Property Plan").length - 1, 3,
+    `the item name should be written three times, not once per capture:\n${md}`,
+  );
+  // An item nobody said anything about does not get an empty heading.
+  assert(!md.includes("## 5.2 Budget"), `an item with no record needs no section:\n${md}`);
+});
+
+test("the action register gathers every action with the item it came from", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [["1.2 In camera", 5, 300], ["5.1 Property Plan", 10, 600]],
+    captures: [
+      { id: "a1", kind: "action", text: "to share Heiga", owner: "jenica",
+        sectionName: "1.2 In camera", timestamp: Date.now() },
+      { id: "a2", kind: "action", text: "to come back in December", owner: "",
+        sectionName: "5.1 Property Plan", timestamp: Date.now() },
+    ],
+  });
+  const register = md.split("## Action Register")[1];
+  assert(register, `actions are the one list worth repeating:\n${md}`);
+  assert(
+    register.includes("- [ ] Jenica — to share Heiga _(1.2 In camera)_"),
+    `an action needs its owner and its item to be worked from:\n${register}`,
   );
   assert(
-    md.includes("- **4.1 AI Usage Policy** — noted"),
-    "a motion without a mover should still lead with its item",
+    register.includes("- [ ] to come back in December _(5.1 Property Plan)_"),
+    `an unowned action still belongs in the register:\n${register}`,
   );
+});
+
+test("an owner typed as an @mention is written out as a name", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [["Budget", 5, 300]],
+    captures: [{ id: "a1", kind: "action", text: "to circulate the pack", owner: "mary anne",
+      sectionName: "Budget", timestamp: Date.now() }],
+  });
+  assert(md.includes("Mary Anne — to circulate the pack"),
+    `a name lifted from an @mention should still read as a name:\n${md}`);
+});
+
+test("who chaired and who sent apologies reach the minutes", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [["Budget", 5, 300]],
+    meeting: { chair: "Sam Reed", attendees: "Mel, Andrew", apologies: "Jenica" },
+  });
+  assert(md.includes("- **Chair:** Sam Reed"), `the chair belongs in the header:\n${md}`);
+  assert(md.includes("- **Present:** Mel, Andrew"), `attendance belongs in the header:\n${md}`);
+  assert(md.includes("- **Apologies:** Jenica"), `apologies belong in the header:\n${md}`);
+  assert(md.includes("- **Date:** "), "the header should still carry the date");
+  // Absent fields leave no empty rows behind.
+  const bare = await seedFinished(page, origin, { sections: [["Budget", 5, 300]] });
+  assert(!bare.includes("**Chair:**") && !bare.includes("**Apologies:**"),
+    `an unfilled field should be left out, not printed blank:\n${bare}`);
 });
 
 test("moved: and seconded: are lifted off the motion text when filed live", async (page, origin) => {
@@ -509,6 +593,17 @@ test("moved: and seconded: are lifted off the motion text when filed live", asyn
   assertEqual(motion.moved, "Mel", "mover recorded");
   assertEqual(motion.seconded, "Andrew", "seconder recorded");
   assertEqual(motion.sectionName, "4.1 AI Usage Policy", "still filed against the item");
+});
+
+test("the chair and apologies typed on Prepare survive into the meeting", async (page, origin) => {
+  await openApp(page, origin, { items: ["Budget"] });
+  await page.fill('input[placeholder="Optional — who is chairing"]', "Sam Reed");
+  await page.fill('input[placeholder="Optional — names, comma separated"]', "Mel, Andrew");
+  await page.fill('input[placeholder="Optional — who sent apologies"]', "Jenica");
+  await startMeeting(page);
+  const m = (await readState(page)).meeting;
+  assertEqual([m.chair, m.attendees, m.apologies], ["Sam Reed", "Mel, Andrew", "Jenica"],
+    "all three should be carried into the running meeting");
 });
 
 /* =====================================================================
