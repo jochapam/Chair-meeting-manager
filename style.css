@@ -1021,6 +1021,8 @@ table.minutes-table th {
   .item-notes:placeholder-shown { display: none; }
 
   .flat-row { break-inside: avoid; }
+  .minute-item { break-inside: avoid; }
+  .minute-item-body .item-notes:focus { box-shadow: none; }
   .section-label-row { break-after: avoid; }
   .field { break-inside: avoid; }
 }
@@ -1039,14 +1041,6 @@ table.minutes-table th {
   color: var(--text-dim);
 }
 
-/* Per-item note box on the minutes. Sized to its content by autoGrow(), so
-   an item with nothing written against it is one line, not a fixed block —
-   a 30-item agenda would otherwise be a page of empty boxes. */
-.item-notes {
-  min-height: 0;
-  resize: none;
-  overflow: hidden;
-}
 
 /* ---------- item purpose ("for discussion / feedback / noting") ---------- */
 
@@ -1093,6 +1087,93 @@ table.minutes-table th {
 .agenda-item .name .purpose-chip { margin-left: 6px; font-size: 0.55rem; padding: 1px 5px; }
 .section-label-row .purpose-chip { margin-left: 2px; }
 
-/* An item the meeting never reached still gets its line in the agenda, but
-   it is not part of the record — say so quietly. */
-.item-unreached .section-label { color: var(--text-dim); font-weight: 500; }
+/* ---------- minutes: the agenda, item by item ---------- */
+/* Three tiers on this page: the section headings (AGENDA, ACTION REGISTER)
+   stay small-caps labels; the item name is a real heading, set as written;
+   its record is body text indented beneath it. The item name used to wear
+   the label treatment too, which made a long one both the hardest thing
+   here to read and indistinguishable from the structure around it. */
+
+.minute-item { padding: 18px 0 2px; border-top: 1px solid var(--line-soft); }
+.minute-item:first-of-type { border-top: none; }
+.minute-item-head { display: flex; align-items: baseline; gap: 14px; }
+
+.minute-item-num {
+  flex-shrink: 0;
+  width: 20px;
+  text-align: right;
+  font-family: "Archivo Narrow", sans-serif;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.minute-item-name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.minute-item-meta {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-family: "Archivo Narrow", sans-serif;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.minute-item-meta .sep { color: var(--line-soft-2); }
+.minute-item-meta .delta { min-width: 24px; text-align: right; font-weight: 600; }
+.minute-item-meta .delta.under { color: var(--good); }
+.minute-item-meta .delta.over { color: var(--bad); }
+
+/* The record sits under the name it belongs to, indented to the item's own
+   text column. Alignment does the grouping — no vertical rule. */
+.minute-item-body { margin: 4px 0 0 34px; }
+.minute-item-body .item-notes {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 3px 0;
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--text);
+  min-height: 0;
+  resize: none;
+  overflow: hidden;
+}
+.minute-item-body .item-notes:focus { outline: none; box-shadow: inset 0 -1px 0 var(--accent); }
+.minute-item-name .purpose-chip { margin-left: 8px; }
+
+/* On an item with nothing recorded the empty note box is just a place to
+   click, and twenty visible "Add a note" prompts drown the handful of
+   items where something actually happened. The prompt appears when the
+   item is pointed at or the box is in use. */
+.minute-item:not(.has-record) .item-notes::placeholder { color: transparent; }
+.minute-item:not(.has-record):hover .item-notes::placeholder,
+.minute-item:not(.has-record):focus-within .item-notes::placeholder { color: #b4b0b0; }
+.minute-item:not(.has-record):hover .item-notes { box-shadow: inset 0 -1px 0 var(--line-soft); }
+.minute-item-body .flat-row { padding: 7px 0; font-size: 0.95rem; }
+.minute-item-body .flat-row:last-child { border-bottom: none; }
+
+/* The register repeats the actions, so it reads at the same size they do
+   under their items — it must not out-weigh the item names above it. */
+.register-row { font-size: 0.95rem; padding: 8px 0; }
+.register-row .stat.dim { margin-left: 10px; }
+
+/* An item that ran but has nothing recorded is still on the agenda — it
+   just isn't part of the record. Quieter, so the items where something
+   actually happened lead the page. */
+.minute-item:not(.has-record) .minute-item-name { font-weight: 500; color: var(--text-mid); }
+.minute-item.unreached .minute-item-name { color: var(--text-dim); }
+.minute-item.unreached .minute-item-meta { font-style: italic; }
+
+@media (max-width: 640px) {
+  .minute-item-head { flex-wrap: wrap; }
+  .minute-item-meta { width: 100%; padding-left: 34px; }
+  .minute-item-body { margin-left: 0; }
+}
