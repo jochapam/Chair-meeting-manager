@@ -2206,34 +2206,63 @@ function renderMinutes() {
   // heading row already says planned, actual and variance.
   const grow = [];
   app.appendChild(flatSectionLabel("Agenda", `${m.sections.length} item${m.sections.length === 1 ? "" : "s"}`));
-  m.sections.forEach(sec => {
+  m.sections.forEach((sec, idx) => {
     const r = itemRecord(m, sec);
     const ran = sec.actualSeconds != null;
-    const timing = ran
-      ? `${fmtMinutesRow(sec.originalPlannedSeconds)} planned · ${fmtMinutesRow(sec.actualSeconds)} actual (${fmtVariance(sec.actualSeconds - sec.originalPlannedSeconds)})`
-      : `${fmtMinutesRow(sec.originalPlannedSeconds)} planned · not reached`;
-    const head = flatSectionLabel(sec.name, timing);
-    const chip = purposeChip(sec);
-    if (chip) head.insertBefore(chip, head.children[1]);
-    if (!ran) head.classList.add("item-unreached");
-    app.appendChild(head);
+    const recorded = itemHasRecord(r);
+
+    // Three tiers, and the item's name is the top one. It used to be set as
+    // a small-caps label — the treatment the section headings use — which
+    // made a long name like "1.4 ATO - NFP Annual Self Review Assessment"
+    // both the hardest thing on the page to read and indistinguishable in
+    // weight from the structure around it.
+    const block = el("div", { class: `minute-item${recorded ? " has-record" : ""}${ran ? "" : " unreached"}` });
+
+    const name = el("h3", { class: "minute-item-name" }, [sec.name, purposeChip(sec)]);
+    const meta = el("div", { class: "minute-item-meta" });
+    if (ran) {
+      const delta = sec.actualSeconds - sec.originalPlannedSeconds;
+      meta.appendChild(el("span", null, `${fmtMinutesRow(sec.originalPlannedSeconds)} planned`));
+      meta.appendChild(el("span", { class: "sep" }, "·"));
+      meta.appendChild(el("span", null, `${fmtMinutesRow(sec.actualSeconds)} actual`));
+      // The one place colour is allowed on this page: over and under are
+      // the behind/ahead indicator, which owns red and green everywhere.
+      meta.appendChild(el("span", { class: `delta ${delta < 0 ? "under" : delta > 0 ? "over" : ""}` }, fmtVariance(delta)));
+    } else {
+      meta.appendChild(el("span", null, `${fmtMinutesRow(sec.originalPlannedSeconds)} planned`));
+      meta.appendChild(el("span", { class: "sep" }, "·"));
+      meta.appendChild(el("span", null, "not reached"));
+    }
+    block.appendChild(el("div", { class: "minute-item-head" }, [
+      el("div", { class: "minute-item-num" }, String(idx + 1)),
+      name,
+      meta,
+    ]));
+
+    // Everything recorded against the item is indented under it, so the
+    // record reads as belonging to the name above rather than as the next
+    // thing in a flat stream.
+    const bodyEl = el("div", { class: "minute-item-body" });
 
     // Nothing happened under an item that was never reached, so it gets no
     // note box to fill in — just its line in the agenda.
     if (ran) {
-      const ta = el("textarea", { class: "underline-input item-notes", rows: "1", placeholder: "Add a note for the record" });
+      const ta = el("textarea", { class: "item-notes", rows: "1", placeholder: "Add a note for the record" });
       ta.value = sec.notes || "";
       ta.addEventListener("input", (e) => { sec.notes = e.target.value; save(); autoGrow(ta); });
-      app.appendChild(el("div", { class: "field" }, ta));
+      bodyEl.appendChild(ta);
       // Sized after it's in the document — scrollHeight needs a layout. An
       // agenda can run to 30 items, so an empty note box is one line high
       // rather than a fixed block of nothing.
       grow.push(ta);
     }
 
-    r.decisions.forEach(d => app.appendChild(decisionRow(d)));
-    r.motions.forEach(mo => app.appendChild(motionRow(mo)));
-    r.actions.forEach(a => app.appendChild(actionRow(a)));
+    r.decisions.forEach(d => bodyEl.appendChild(decisionRow(d)));
+    r.motions.forEach(mo => bodyEl.appendChild(motionRow(mo)));
+    r.actions.forEach(a => bodyEl.appendChild(actionRow(a)));
+
+    if (bodyEl.childNodes.length) block.appendChild(bodyEl);
+    app.appendChild(block);
   });
 
   // Captures whose agenda item was never recorded — only migrated entries
@@ -2265,7 +2294,7 @@ function renderMinutes() {
   if (actionItems.length) {
     app.appendChild(flatSectionLabel("Action Register"));
     actionItems.forEach(a => {
-      const row = el("div", { class: "flat-row" });
+      const row = el("div", { class: "flat-row register-row" });
       row.appendChild(el("div", { class: "name" }, [
         a.owner ? el("strong", null, displayName(a.owner) + " — ") : null,
         a.text,

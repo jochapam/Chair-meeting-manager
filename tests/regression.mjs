@@ -661,20 +661,38 @@ test("the minutes list each agenda item once, including ones never reached", asy
     captures: [{ id: "d1", kind: "decision", text: "agreed", owner: "",
       sectionName: "1.2 Budget", timestamp: Date.now() }],
   });
-  const headings = await page.$$eval(".section-label", els => els.map(e => e.textContent));
+  const headings = await page.$$eval(".minute-item-name", els => els.map(e => e.textContent.trim()));
   for (const name of ["1.1 Opening", "1.2 Budget", "1.3 Never got here"]) {
     assertEqual(headings.filter(h => h === name).length, 1,
       `"${name}" should appear once on the minutes, not in a timing list and again below`);
   }
   // An item the meeting never reached is still part of the agenda, and is
   // marked as such rather than silently dropped.
-  // innerText, so it comes back as rendered — the label is upper-cased by CSS.
-  const unreached = (await page.locator(".item-unreached").innerText()).toLowerCase();
+  const unreached = (await page.locator(".minute-item.unreached").innerText()).toLowerCase();
   assert(unreached.includes("1.3 never got here") && unreached.includes("not reached"),
     `an item never reached should say so: ${unreached}`);
   // ...and gets no note box, because nothing happened under it.
   assertEqual(await page.locator(".item-notes").count(), 2,
     "only the items that ran should offer somewhere to write");
+});
+
+test("an agenda item is set as a heading, not as a small-caps label", async (page, origin) => {
+  await seedFinished(page, origin, {
+    sections: [["1.4 ATO - NFP Annual Self Review Assessment", 5, 300, "agreed to lodge"]],
+  });
+  const [item, label] = await page.evaluate(() => {
+    const read = sel => {
+      const cs = getComputedStyle(document.querySelector(sel));
+      return { size: parseFloat(cs.fontSize), weight: parseInt(cs.fontWeight, 10), transform: cs.textTransform };
+    };
+    return [read(".minute-item-name"), read(".section-label")];
+  });
+  // A long item name in wide-tracked upper case is the hardest thing on the
+  // page to read, and it is the page's primary content.
+  assertEqual(item.transform, "none", "an item name should read as it was typed");
+  assert(item.size > label.size,
+    `the item name should outrank the section label: ${item.size}px vs ${label.size}px`);
+  assert(item.weight >= 700, `and carry a heading's weight, got ${item.weight}`);
 });
 
 /* =====================================================================
