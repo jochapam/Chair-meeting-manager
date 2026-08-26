@@ -301,6 +301,111 @@ test("un-deferring an item puts it back where it was", async (page, origin) => {
 });
 
 /* =====================================================================
+   Meetings filed by older versions still show everything they recorded
+   ===================================================================== */
+
+test("decisions and actions stored only in the old flat arrays are not lost", async (page, origin) => {
+  // A history entry exactly as an older build wrote it: one decision that
+  // went through the note markers (so it reached captures, with the item
+  // name) and two typed into the old manual forms (flat arrays only).
+  const legacy = {
+    view: "history",
+    meeting: null,
+    savedAgendas: [],
+    history: [{
+      id: "legacy-1",
+      title: "Old Board Meeting",
+      attendees: "",
+      createdAt: Date.parse("2026-01-05T09:00:00"),
+      endedAt: Date.parse("2026-01-05T10:00:00"),
+      currentIndex: 0,
+      timerStatus: "ended",
+      generalNotes: "",
+      breaks: [],
+      deferred: [],
+      sections: [{
+        id: "s1", name: "Budget review",
+        plannedSeconds: 600, originalPlannedSeconds: 600,
+        status: "done", startedAt: null, pausedAccum: 0,
+        actualSeconds: 540, notes: "", autoReclaimed: 0,
+      }],
+      captures: [
+        { id: "c1", kind: "decision", text: "Filed through the notes", owner: "",
+          sectionName: "Budget review", timestamp: Date.parse("2026-01-05T09:10:00") },
+      ],
+      decisions: ["Filed through the notes", "Typed into the old form"],
+      actionItems: [{ text: "Chase the auditor", owner: "Bob" }],
+    }],
+  };
+
+  await page.goto(origin);
+  await page.evaluate(s => localStorage.setItem("chair-meeting-manager:v1", JSON.stringify(s)), legacy);
+  await page.reload();
+  await page.waitForSelector("text=Where the time goes");
+
+  const kinds = (await readState(page)).history[0].captures;
+  assertEqual(kinds.length, 3, "the two flat-array entries should be adopted alongside the existing capture");
+  assert(!kinds.some(c => c.text === "Filed through the notes" && !c.sectionName),
+    "the entry that already had an item must keep it");
+  assertEqual(
+    kinds.filter(c => c.text === "Filed through the notes").length, 1,
+    "an entry recorded in both places must not be duplicated",
+  );
+
+  const action = kinds.find(c => c.kind === "action");
+  assertEqual(action.text, "Chase the auditor", "the flat action item should survive");
+  assertEqual(action.owner, "Bob", "its owner should survive too");
+
+  // And all three must actually appear on the minutes for that meeting.
+  await page.click('.flat-row button:has-text("View")');
+  await page.waitForSelector(".page-eyebrow");
+  const text = await page.$eval("body", b => b.innerText);
+  for (const expected of ["Filed through the notes", "Typed into the old form", "Chase the auditor"]) {
+    assert(text.includes(expected), `"${expected}" should be visible on the minutes`);
+  }
+});
+
+test("repeated wording in an old meeting is kept, not collapsed into one", async (page, origin) => {
+  // Real minutes reuse the same words constantly — "noted" once per paper,
+  // "approved" once per policy. Matching on text alone would fold a dozen
+  // separate resolutions into a single line.
+  const legacy = {
+    view: "history", meeting: null, savedAgendas: [],
+    history: [{
+      id: "m1", title: "Board", attendees: "",
+      createdAt: Date.parse("2026-01-05T09:00:00"), endedAt: Date.parse("2026-01-05T10:00:00"),
+      currentIndex: 0, timerStatus: "ended", generalNotes: "",
+      breaks: [], deferred: [], sections: [],
+      // One "noted" already recorded properly, against its agenda item.
+      captures: [
+        { id: "c1", kind: "decision", text: "noted", owner: "",
+          sectionName: "3.1 Strategic goals", timestamp: Date.parse("2026-01-05T09:10:00") },
+      ],
+      decisions: ["noted", "noted", "noted", "approved"],
+      actionItems: [{ text: "come back in October", owner: "" }, { text: "come back in October", owner: "" }],
+    }],
+  };
+
+  await page.goto(origin);
+  await page.evaluate(s => localStorage.setItem("chair-meeting-manager:v1", JSON.stringify(s)), legacy);
+  await page.reload();
+  await page.waitForSelector("text=Where the time goes");
+
+  const caps = (await readState(page)).history[0].captures;
+  const count = (kind, text) => caps.filter(c => c.kind === kind && c.text === text).length;
+
+  // Three "noted" in the flat array, one of which is the capture already
+  // held — so three in total, not one and not four.
+  assertEqual(count("decision", "noted"), 3, "each separate 'noted' resolution must survive");
+  assertEqual(count("decision", "approved"), 1, "the single 'approved' should appear once");
+  assertEqual(count("action", "come back in October"), 2, "both identical actions must survive");
+  assertEqual(
+    caps.filter(c => c.sectionName === "3.1 Strategic goals").length, 1,
+    "the properly-recorded entry keeps its agenda item and isn't duplicated",
+  );
+});
+
+/* =====================================================================
    runner
    ===================================================================== */
 
