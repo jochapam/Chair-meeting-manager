@@ -54,11 +54,30 @@ export const STORAGE_KEY = "chair-meeting-manager:v1";
 export const readState = (page) =>
   page.evaluate(k => JSON.parse(localStorage.getItem(k)), STORAGE_KEY);
 
+/**
+ * Serve the web-font requests locally as empty CSS.
+ *
+ * index.html links Google Fonts, and a render-blocking stylesheet holds up
+ * DOMContentLoaded until it resolves — roughly 12s per navigation when the
+ * network is unavailable, which is most CI boxes and every offline laptop.
+ * The tests care about behaviour, not typefaces, so short-circuit it.
+ */
+export const stubWebFonts = (page) =>
+  page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//,
+    route => route.fulfill({ status: 200, contentType: "text/css", body: "" }));
+
+/**
+ * Navigate to the app. Waits for DOM ready rather than full `load`: the page
+ * links Google Fonts, so `load` also waits on a network request that is slow
+ * or refused when running offline, which has nothing to do with the app.
+ */
+export const gotoApp = (page, origin) => page.goto(origin, { waitUntil: "domcontentloaded" });
+
 /** Open the app with a clean slate and draft an agenda (no meeting started). */
 export async function openApp(page, origin, { title = "Board Sync", items = ["Opening", "Budget review"] } = {}) {
-  await page.goto(origin);
+  await gotoApp(page, origin);
   await page.evaluate(() => localStorage.clear());
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("text=Start Meeting");
   if (title) await page.fill('input[placeholder="e.g. Q3 Steering Committee"]', title);
   for (const name of items) {
