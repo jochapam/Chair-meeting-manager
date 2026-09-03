@@ -1195,7 +1195,7 @@ function renderSetup() {
 
   const layout = el("div", { class: "two-col" });
   const main = el("div", null);
-  const sidebar = el("div", null);
+  const sidebar = el("div", { class: "side-col" });
 
   const headRow = el("div", { class: "row", style: "justify-content:space-between;align-items:flex-start" });
   headRow.appendChild(el("h1", { class: "page-head" }, "Prepare the meeting"));
@@ -1234,7 +1234,7 @@ function renderSetup() {
   main.appendChild(el("div", { class: "section-label-row" }, [
     el("span", { class: "section-label" }, "Agenda"),
     el("span", { class: "rule" }),
-    el("span", { class: "value", id: "agenda-total" }, `${agendaTotalMinutes(m.sections)} min`),
+    el("span", { class: "value", id: "agenda-total" }, agendaSummary(m.sections)),
   ]));
 
   const list = el("div", { id: "section-list" });
@@ -1305,7 +1305,7 @@ function renderSetup() {
 
   function updateAgendaTotal() {
     const totalEl = document.getElementById("agenda-total");
-    if (totalEl) totalEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
+    if (totalEl) totalEl.textContent = agendaSummary(m.sections);
     const baselineEl = document.getElementById("sidebar-baseline");
     if (baselineEl) baselineEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
     const countEl = document.getElementById("sidebar-count");
@@ -1420,10 +1420,16 @@ function startNewMeetingDraft() {
   }
 }
 
+// The list scrolls inside itself once it's long, so the count is the only
+// thing that says how much of the agenda is out of sight.
+function agendaSummary(sections) {
+  return `${sections.length} item${sections.length === 1 ? "" : "s"} · ${agendaTotalMinutes(sections)} min`;
+}
+
 function refreshAgendaTotals() {
   const m = state.meeting;
   const totalEl = document.getElementById("agenda-total");
-  if (totalEl) totalEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
+  if (totalEl) totalEl.textContent = agendaSummary(m.sections);
   const baselineEl = document.getElementById("sidebar-baseline");
   if (baselineEl) baselineEl.textContent = `${agendaTotalMinutes(m.sections)} min`;
   const topbarRight = document.querySelector(".topbar-right");

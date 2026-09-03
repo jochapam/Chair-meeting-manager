@@ -788,6 +788,94 @@ test("every item the meeting reached gets the same heading", async (page, origin
 });
 
 /* =====================================================================
+   A long agenda must not push the controls off the bottom of the page
+   ===================================================================== */
+
+const longAgenda = n => Array.from({ length: n }, (_, i) => `${Math.ceil((i + 1) / 5)}.${i + 1} Agenda item ${i + 1}`);
+
+/** Is the element fully inside the window, without scrolling? */
+const onScreen = (locator) => locator.evaluate(el => {
+  const r = el.getBoundingClientRect();
+  return r.top >= 0 && r.bottom <= window.innerHeight && r.height > 0;
+});
+
+test("a long agenda leaves the notes box and item controls on screen", async (page, origin) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openApp(page, origin, { items: longAgenda(28) });
+  await startMeeting(page);
+
+  // The cockpit is a frame, not a document: the window itself must not
+  // scroll, however many items are on the agenda.
+  const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+  assert(pageHeight <= 900, `the cockpit should fit the window, got ${pageHeight}px of page`);
+
+  assert(await onScreen(page.locator(".cockpit-notes textarea")),
+    "the notes box is where a chair types all meeting — it cannot be below the fold");
+  assert(await onScreen(page.locator('button:has-text("Next Item")')),
+    "and Next Item must be reachable without scrolling past 28 agenda rows");
+
+  // The agenda still gets to all 28 — it just scrolls on its own.
+  const rail = await page.evaluate(() => {
+    const el = document.getElementById("rail-list");
+    return { scrollable: el.scrollHeight > el.clientHeight + 1, rows: el.children.length };
+  });
+  assertEqual(rail.rows, 28, "every item is still in the rail");
+  assert(rail.scrollable, "the rail scrolls inside itself rather than stretching the page");
+});
+
+test("scrolling the agenda does not move the notes box", async (page, origin) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openApp(page, origin, { items: longAgenda(28) });
+  await startMeeting(page);
+  const before = await page.evaluate(() =>
+    document.querySelector(".cockpit-notes textarea").getBoundingClientRect().top);
+  const moved = await page.evaluate(() => {
+    const el = document.getElementById("rail-list");
+    el.scrollTop = 600;
+    return el.scrollTop;
+  });
+  assert(moved > 0, "the rail must actually have somewhere to scroll for this to mean anything");
+  await page.waitForTimeout(50);
+  const after = await page.evaluate(() =>
+    document.querySelector(".cockpit-notes textarea").getBoundingClientRect().top);
+  assertEqual(after, before, "the panels are independent — one scrolling must not shift another");
+});
+
+test("the cockpit still frames the window when Captured drops below", async (page, origin) => {
+  // Between 901 and 1100px there is no room for a third column, so Captured
+  // becomes a strip under the other two. The frame has to hold there too —
+  // it is an ordinary laptop window width.
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await openApp(page, origin, { items: longAgenda(28) });
+  await startMeeting(page);
+  const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+  assert(pageHeight <= 800, `the cockpit should still fit the window, got ${pageHeight}px`);
+  assert(await onScreen(page.locator('button:has-text("Next Item")')), "Next Item stays reachable");
+  assert(await onScreen(page.locator("#captures-rail")), "and Captured is still in view, not below the fold");
+});
+
+test("a long agenda on Prepare keeps the add row and Start Meeting in reach", async (page, origin) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openApp(page, origin, { items: longAgenda(28) });
+
+  const list = await page.evaluate(() => {
+    const el = document.getElementById("section-list");
+    return { scrollable: el.scrollHeight > el.clientHeight + 1, rows: el.children.length };
+  });
+  assertEqual(list.rows, 28, "all 28 items are there");
+  assert(list.scrollable, "the agenda scrolls inside itself instead of stretching the page");
+
+  assert(await onScreen(page.locator('input[placeholder="New agenda item"]')),
+    "you should not scroll two screens to add a twenty-ninth item");
+  assert(await onScreen(page.locator('button:has-text("Start Meeting")')),
+    "and Start Meeting should follow you down rather than scroll away off the top");
+
+  // The count says how much of the agenda is out of sight.
+  const label = await page.locator("#agenda-total").innerText();
+  assert(label.includes("28 items"), `the label should say how many items there are: ${label}`);
+});
+
+/* =====================================================================
    runner
    ===================================================================== */
 
