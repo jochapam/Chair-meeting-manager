@@ -213,6 +213,9 @@ p { margin: 0 0 8px; color: var(--text-dim); }
 .stat-row .stat-value.ahead { color: var(--good); }
 
 .two-col { display: grid; grid-template-columns: 1fr 300px; gap: 32px; align-items: start; }
+/* Start Meeting and the baseline follow you down a long agenda instead of
+   scrolling away off the top. */
+.two-col > .side-col { position: sticky; top: 20px; }
 .side-card { border: 2px solid var(--line); background: var(--surface); padding: 16px; margin-bottom: 16px; }
 .side-card .side-head {
   font-family: "Archivo Narrow", sans-serif;
@@ -270,6 +273,7 @@ p { margin: 0 0 8px; color: var(--text-dim); }
 
 @media (max-width: 800px) {
   .two-col { grid-template-columns: 1fr; }
+  .two-col > .side-col { position: static; }
 }
 
 label {
@@ -970,17 +974,49 @@ table.minutes-table th {
 }
 .cockpit-notes textarea:focus { border-top-color: var(--accent); }
 
+/* The cockpit is a fixed frame, not a document. It fills the window and
+   never grows past it, so the notes box, the Previous/Next buttons and the
+   Captured panel stay exactly where the chair left them however long the
+   agenda is — each panel scrolls on its own instead. A 28-item agenda used
+   to make the page three screens tall, which put the notes box and the
+   item controls below the fold and made you scroll past the whole agenda
+   to reach them.
+
+   Applies wherever the panels sit side by side. Below that they stack, and
+   a stacked page has to scroll normally. */
+@media (min-width: 901px) {
+  .cockpit { height: 100vh; overflow: hidden; }
+  .cockpit-body { min-height: 0; }
+  .cockpit-rail, .cockpit-notes, .captures-rail { min-height: 0; }
+  /* Rail and Captured keep their headers fixed, and the deferred block
+     stays pinned below the rail; only the lists between them move. */
+  #rail-list, #captures-list { flex: 1; min-height: 0; overflow-y: auto; }
+  /* Without this the textarea's 260px floor pushes the buttons under it
+     off a short window — the very thing this is here to prevent. */
+  .cockpit-notes textarea { min-height: 0; }
+}
+
 @media (max-width: 1100px) {
-  .cockpit-body { grid-template-columns: 260px 1fr; }
-  .captures-rail { border-left: none; border-top: 2px solid var(--line); max-height: 260px; }
-  .cockpit-body { grid-template-rows: auto auto auto; }
+  /* No room for a third column: Captured becomes a strip under both. */
+  .cockpit-body {
+    grid-template-columns: 260px 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .captures-rail {
+    grid-column: 1 / -1;
+    border-left: none;
+    border-top: 2px solid var(--line);
+    max-height: 260px;
+  }
   .rail-resize-handle, .captures-resize-handle { display: none; }
 }
 
 @media (max-width: 900px) {
-  .cockpit-body { grid-template-columns: 1fr; }
+  /* Stacked — back to an ordinary scrolling page. */
+  .cockpit { height: auto; overflow: visible; }
+  .cockpit-body { grid-template-columns: 1fr; grid-template-rows: none; }
   .cockpit-rail { border-right: none; border-bottom: 2px solid var(--line); max-height: 220px; overflow-y: auto; }
-  .captures-rail { max-height: 220px; overflow-y: auto; }
+  .captures-rail { grid-column: auto; max-height: 220px; overflow-y: auto; }
 }
 
 @media (max-width: 480px) {
@@ -1179,3 +1215,10 @@ table.minutes-table th {
   .minute-item-meta { width: 100%; padding-left: 34px; }
   .minute-item-body { margin-left: 0; }
 }
+
+/* A long agenda used to push the "New agenda item" row and the paste box
+   off the bottom of the page — with 28 items you scrolled two screens to
+   add a twenty-ninth. The list scrolls inside itself instead, so what you
+   type into stays put. Short agendas are unaffected: max-height only
+   bites once the list is taller than it. */
+#section-list { max-height: 50vh; overflow-y: auto; }
