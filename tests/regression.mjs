@@ -418,8 +418,8 @@ async function seedFinished(page, origin, { sections, captures = [], orderChange
       createdAt: Date.parse("2026-01-05T09:00:00"), endedAt: Date.parse("2026-01-05T11:00:00"),
       currentIndex: sections.length - 1, timerStatus: "ended", generalNotes: "",
       breaks: [], deferred: [], orderChanged, captures,
-      sections: sections.map(([name, planMin, actualSec, notes = ""], i) => ({
-        id: "s" + i, name, plannedSeconds: planMin * 60, originalPlannedSeconds: planMin * 60,
+      sections: sections.map(([name, planMin, actualSec, notes = "", purpose = ""], i) => ({
+        id: "s" + i, name, purpose, plannedSeconds: planMin * 60, originalPlannedSeconds: planMin * 60,
         status: "done", startedAt: null, pausedAccum: 0, actualSeconds: actualSec,
         notes, autoReclaimed: 0,
       })),
@@ -644,6 +644,52 @@ test("a purpose set on Prepare reaches the live agenda and the minutes", async (
     buildMinutesMarkdown(JSON.parse(localStorage.getItem("chair-meeting-manager:v1")).meeting));
   assert(md.includes("| 3.1 Strategic goals | Discussion |"), `the table should carry the purpose:\n${md}`);
   assert(md.includes("_For discussion_"), `and the item should say it in words:\n${md}`);
+});
+
+test("\"for decision\" and \"for approval\" both mark an item for decision", async (page, origin) => {
+  await openApp(page, origin, { items: [] });
+  await page.fill(".paste-box textarea", [
+    "4.1 AI Usage Policy (for decision)  5 mins",
+    "4.2 BCEMP - for approval  5 mins",
+  ].join("\n"));
+  await page.click('button:has-text("Parse and Add")');
+  const secs = (await readState(page)).meeting.sections;
+  assertEqual(secs.map(s => s.purpose), ["decision", "decision"], "board papers say either");
+  assertEqual(secs.map(s => s.name), ["4.1 AI Usage Policy", "4.2 BCEMP"], "and the marker leaves the name");
+});
+
+test("an item put up for decision that resolved nothing says so", async (page, origin) => {
+  const md = await seedFinished(page, origin, {
+    sections: [
+      ["4.1 Resolved", 5, 300, "", "decision"],
+      ["4.2 Left hanging", 5, 300, "", "decision"],
+      ["4.3 Never reached", 5, null, "", "decision"],
+    ],
+    captures: [{ id: "mo1", kind: "motion", text: "approved", owner: "",
+      sectionName: "4.1 Resolved", timestamp: Date.now() }],
+  });
+
+  // The gap is the record: an unresolved decision item gets a heading even
+  // with nothing under it, rather than vanishing from the export.
+  const hanging = md.split("## 4.2 Left hanging")[1];
+  assert(hanging, `an unresolved decision item must not vanish from the minutes:\n${md}`);
+  assert(hanging.split("\n## ")[0].includes("_For decision — no decision recorded._"),
+    `and must say what is missing:\n${hanging}`);
+
+  // A motion counts as the decision.
+  const resolved = md.split("## 4.1 Resolved")[1].split("\n## ")[0];
+  assert(!resolved.includes("no decision recorded"), `a carried motion is a decision:\n${resolved}`);
+  assert(resolved.includes("_For decision_"), "it still says what it was for");
+
+  // An item never reached isn't a gap in the decision — it's not reached,
+  // which the table already says.
+  assert(!md.includes("## 4.3 Never reached"), "an item not reached is not an unresolved decision");
+
+  // And the screen agrees.
+  const flagged = await page.$$eval(".minute-item",
+    els => els.filter(e => e.querySelector(".item-unresolved"))
+              .map(e => e.querySelector(".minute-item-name").firstChild.textContent));
+  assertEqual(flagged, ["4.2 Left hanging"], "only the unresolved, reached item is flagged on screen");
 });
 
 test("an agenda with no purposes set gets no column of dashes", async (page, origin) => {

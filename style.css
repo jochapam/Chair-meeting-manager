@@ -1222,3 +1222,13 @@ table.minutes-table th {
    type into stays put. Short agendas are unaffected: max-height only
    bites once the list is taller than it. */
 #section-list { max-height: 50vh; overflow-y: auto; }
+
+/* An item put up for decision that resolved nothing. Stated, not alarmed:
+   red and green belong to the behind/ahead indicator, and this is a gap in
+   the record rather than a failure of the schedule. */
+.item-unresolved {
+  padding: 3px 0;
+  font-size: 0.95rem;
+  font-style: italic;
+  color: var(--text-dim);
+}
