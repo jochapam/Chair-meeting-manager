@@ -202,6 +202,10 @@ function fmtDateTimeLower(ts) {
 // differently from "for discussion", and a reader of the minutes should be
 // able to see what was being asked of the meeting rather than infer it.
 const PURPOSES = [
+  // Ordered by what the item asks of the meeting. "For decision" is the one
+  // that cannot be left hanging — the others describe how to run the
+  // conversation, this one says something has to come out of it.
+  { key: "decision", label: "Decision", full: "For decision" },
   { key: "discussion", label: "Discussion", full: "For discussion" },
   { key: "feedback", label: "Feedback", full: "For feedback" },
   { key: "note", label: "Note", full: "For noting" },
@@ -212,7 +216,7 @@ const purposeOf = key => PURPOSES.find(p => p.key === key) || null;
 // Agendas usually already say this — "1.2 In camera session (for discussion)".
 // Lift it off the name when one is pasted in, rather than making a chair
 // re-tag thirty items by hand.
-const PURPOSE_SUFFIX = /[\s(\[–—:|-]*\bfor\s+(discussion|feedback|noting|note|information|info)\b[)\]]?[\s.]*$/i;
+const PURPOSE_SUFFIX = /[\s(\[–—:|-]*\bfor\s+(decision|approval|discussion|feedback|noting|note|information|info)\b[)\]]?[\s.]*$/i;
 
 function splitPurpose(name) {
   const hit = name.match(PURPOSE_SUFFIX);
@@ -222,7 +226,8 @@ function splitPurpose(name) {
   // A line that is nothing but the marker keeps its text — better a badly
   // named item than an empty one.
   if (!stripped) return { name, purpose: "" };
-  return { name: stripped, purpose: word === "discussion" ? "discussion" : word === "feedback" ? "feedback" : "note" };
+  const key = { decision: "decision", approval: "decision", discussion: "discussion", feedback: "feedback" }[word] || "note";
+  return { name: stripped, purpose: key };
 }
 
 function parseAgendaText(text) {
@@ -545,6 +550,17 @@ function itemHasRecord(r) {
   return !!(r.notes || r.decisions.length || r.actions.length || r.motions.length);
 }
 
+// An item put up for decision that ended with nothing resolved is the one
+// gap a chair needs to see. Saying so is the whole reason the tag is worth
+// setting: the other three describe how to run the conversation, this one
+// says something has to come out of it.
+function decisionOutstanding(section, record) {
+  return section.purpose === "decision"
+    && section.actualSeconds != null
+    && !record.decisions.length
+    && !record.motions.length;
+}
+
 // One line per action, used in both the item body and the register.
 function actionLine(a, { withItem = false } = {}) {
   const who = displayName(a.owner);
@@ -821,7 +837,10 @@ function buildMinutesMarkdown(m) {
   // rather than becoming empty headings here.
   for (const sec of m.sections) {
     const r = itemRecord(m, sec);
-    if (!itemHasRecord(r)) continue;
+    const outstanding = decisionOutstanding(sec, r);
+    // An unresolved decision item earns a heading even with nothing under
+    // it — the absence is the record.
+    if (!itemHasRecord(r) && !outstanding) continue;
     lines.push(`## ${sec.name}`);
     lines.push("");
     // No timing line here. The table above already gives every item its
@@ -829,7 +848,7 @@ function buildMinutesMarkdown(m) {
     // the same duplication this structure exists to remove.
     const p = purposeOf(sec.purpose);
     if (p) {
-      lines.push(`_${p.full}_`);
+      lines.push(outstanding ? `_${p.full} — no decision recorded._` : `_${p.full}_`);
       lines.push("");
     }
     if (r.notes) {
@@ -2257,6 +2276,10 @@ function renderMinutes() {
     // record reads as belonging to the name above rather than as the next
     // thing in a flat stream.
     const bodyEl = el("div", { class: "minute-item-body" });
+
+    if (decisionOutstanding(sec, r)) {
+      bodyEl.appendChild(el("div", { class: "item-unresolved" }, "No decision recorded."));
+    }
 
     // Nothing happened under an item that was never reached, so it gets no
     // note box to fill in — just its line in the agenda.
